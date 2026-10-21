@@ -314,7 +314,7 @@ async function hideRow($: EngineInterface, requestId: string, isExpanded: boolea
 // ---------- 总结 ----------
 
 /** 交给模型的状态说明：关键词 + 什么时候用 */
-const STATUS_LINES = STATUSES.map(st => `\n  ${st}：${STATUS_INFO[st].meaning}`).join('')
+const STATUS_LINES = STATUSES.filter(st => STATUS_INFO[st].isVerdict !== true).map(st => `\n  ${st}：${STATUS_INFO[st].meaning}`).join('')
 
 const SYSTEM = `你在给一段 Claude Code 会话做大纲。每次给你「现有大纲」和「刚结束的一轮」，你把这一轮变成大纲里的一个块。
 只输出一个 JSON 对象，不要任何别的文字，不要代码块标记。字段：
@@ -414,8 +414,10 @@ async function summarize($: EngineInterface, id: string, turn: Turn, answer: str
         return {
           ...b,
           isPending: false,
-          title: typeof data?.title === 'string' && data.title !== '' ? data.title : b.title,
-          status: (STATUSES as string[]).includes(status) ? (status as Status) : isAborted ? 'PAUSED' : 'DONE',
+          // 模型没给标题、我又只贴了内容没打字时，拿回答的第一行顶上
+          title: typeof data?.title === 'string' && data.title !== '' ? data.title : b.title !== '' ? b.title : clip(answer.trim().split('\n')[0] ?? '', 30),
+          // 验收用的状态（Rework、Unclear?）只归我用，模型给了也不认
+          status: (STATUSES as string[]).includes(status) && STATUS_INFO[status as Status].isVerdict !== true ? (status as Status) : isAborted ? 'PAUSED' : 'DONE',
           statusAt: now,
           needsMeStatus: undefined,
           did: didParsed.did,
@@ -702,6 +704,8 @@ async function changeStatus($: EngineInterface, pick: (current: Status) => Statu
 
 /** 验收时我给了这个状态，Claude 该怎么接 */
 const VERDICT: Partial<Record<Status, string>> = {
+  REWORK: '方向对，细节要改。先复述你理解的要改哪几处，我确认了再动手，改完让我再验收。',
+  UNCLEAR: '我没看懂你做了什么、为什么这么做。先别改代码，拿这一轮的改动和命令结果解释清楚：做了什么、为什么这样做、怎么验证的。',
   FAILED: '没做成。先对照这一轮的改动和命令结果找原因：原因清楚就直接返工，改完让我再验收；拿不准哪里不对，先追问我，别瞎改。',
   ERRORED: '出错卡住了。先排查报错、修好再继续；缺信息就追问我。',
   HITLIMIT: '撞上了额度或用量上限。先停下，说明卡在哪个上限、大概什么时候能继续，别反复重试。',
@@ -709,6 +713,10 @@ const VERDICT: Partial<Record<Status, string>> = {
   CANCELLED: '不做了。停下；这件事要是已经改了文件，列出改动，问我要不要撤回，我没同意之前别动。',
   DOING: '还没做完。说清还差什么，接着做完，做完让我再验收。',
 }
+
+/** 一次打回好几件时附上：能并行的交给子代理，碰同一批文件的按顺序来 */
+const PARALLEL =
+  '这几件里互不相干、不改同一批文件的，开子代理（Agent 工具）并行处理，一个子代理只管一件，做完把结果汇总给我；会改同一批文件的按顺序做，免得互相覆盖。Rework 要先复述等我确认、Unclear? 只做解释，这两种不用开子代理。'
 
 /** 等我停手再发：N 要连按几下才换到想要的状态 */
 const VERDICT_DELAY = 4000
@@ -739,7 +747,8 @@ async function sendVerdicts($: EngineInterface) {
   if (lines.length === 0) return
   // mod 自己发的消息不经过自己的 prompt.submit 钩子：侧栏里改过的状态直接接在正文后面
   const told = await takeChanges($)
-  await $.prompt.submit({ text: ['我在大纲侧栏验收时，没让下面这些事通过。请逐条回应：', ...lines, ...(told === undefined ? [] : ['', told])].join('\n') })
+  const parallel = lines.length > 1 ? ['', PARALLEL] : []
+  await $.prompt.submit({ text: ['我在大纲侧栏验收时，没让下面这些事通过。请逐条回应：', ...lines, ...parallel, ...(told === undefined ? [] : ['', told])].join('\n') })
 }
 
 /** 同一处改了几次只记最后一次；改回原样就不用说了 */
@@ -759,7 +768,7 @@ async function takeChanges($: EngineInterface) {
   await update($, changes, () => [])
   const lines = list.map(c => `- ${c.what}：${c.from} → ${c.to}`)
   return [
-    '用户在会话大纲侧栏里手动改了下面这些状态。这是用户在告诉你进展：「需要用户做」的事改成 DONE，表示用户已经做完了；块的状态改动表示用户对那件事的判断：DONE 是认可做完；FAILED 是用户认为没做成，要返工，先弄清哪里不对；ERRORED 是出了错卡住；HITLIMIT 是撞上额度或用量上限；SUSPENDED 是先搁置、暂时别碰；CANCELLED 是不做了。据此接着做，不用复述这段说明。',
+    '用户在会话大纲侧栏里手动改了下面这些状态。这是用户在告诉你进展：「需要用户做」的事改成 DONE，表示用户已经做完了；块的状态改动表示用户对那件事的判断：DONE 是认可做完；REWORK 是方向对、细节要改；UNCLEAR 是用户没看懂，先解释别改；FAILED 是用户认为没做成，要返工，先弄清哪里不对；ERRORED 是出了错卡住；HITLIMIT 是撞上额度或用量上限；SUSPENDED 是先搁置、暂时别碰；CANCELLED 是不做了。据此接着做，不用复述这段说明。',
     ...lines,
   ].join('\n')
 }
@@ -889,6 +898,9 @@ const DEPTH_KEYS: Record<string, number> = { '!': 1, '@': 2, '#': 3, '！': 1, '
 
 type KeyMessage = { type: 'key'; key: string; shift: boolean; ctrl: boolean; meta: boolean }
 
+/** ⇧ 加这些字母：直接标成对应的负面状态，不用按 N 一个个转 */
+const VERDICT_KEYS: Record<string, Status> = { r: 'REWORK', u: 'UNCLEAR', f: 'FAILED', e: 'ERRORED', l: 'HITLIMIT', s: 'SUSPENDED', c: 'CANCELLED' }
+
 /** 树视图里收到的按键，按 Logseq 的习惯来 */
 async function handleKey($: EngineInterface, k: KeyMessage, keys: readonly View[]) {
   const isUp = k.key === 'up'
@@ -909,8 +921,9 @@ async function handleKey($: EngineInterface, k: KeyMessage, keys: readonly View[
     if (v !== undefined) await switchView($, v)
     return
   }
-  // ⇧S：在负面状态之间转（终端可能报成大写 S，也可能是 s 带 shift）
-  if (k.key === 'S' || (k.key === 's' && k.shift)) return runAction($, 'status-bad')
+  // ⇧ 加首字母直接标成对应的负面状态（终端可能报成大写字母，也可能是小写带 shift）
+  const verdict = /^[a-zA-Z]$/.test(k.key) && (k.shift || k.key !== k.key.toLowerCase()) ? VERDICT_KEYS[k.key.toLowerCase()] : undefined
+  if (verdict !== undefined) return setStatus($, verdict)
   const action = ACTIONS.find(a => a.hotkey === k.key.toLowerCase())
   if (action !== undefined) return runAction($, action.key)
 }

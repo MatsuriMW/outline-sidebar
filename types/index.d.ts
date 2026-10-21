@@ -1,6 +1,6 @@
 /** 照 Obsidian todoseq 的关键词（见 hooks/status.ts） */
 export type Status =
-  | 'TODO' | 'TODOFORAI' | 'DOING' | 'TOREVIEW' | 'NEEDOK' | 'ERRORED' | 'HITLIMIT' | 'QUEUED' | 'DELEGATED' | 'PAUSED'
+  | 'TODO' | 'TODOFORAI' | 'DOING' | 'TOREVIEW' | 'REWORK' | 'UNCLEAR' | 'NEEDOK' | 'ERRORED' | 'HITLIMIT' | 'QUEUED' | 'DELEGATED' | 'PAUSED'
   | 'WAITING' | 'SUSPENDED' | 'DONE' | 'FAILED' | 'CANCELLED'
 
 /** turn：我发的一轮；agent / fork：Claude Code 切出去的子任务；btw：/btw 的旁支问题；recap：回顾 */

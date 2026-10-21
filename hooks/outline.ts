@@ -81,6 +81,9 @@ export const FIELD: Record<Field, { icon: PhosphorIcon | Mark; label: string }> 
 }
 
 /** 终端里画图标用的字：Phosphor 字体里的字，「需要我做」是 - */
+/** 没总结出标题、也没有原话可用的块 */
+export const UNTITLED = '（没有标题）'
+
 /** 「需要我做」那一条行首的记号 */
 export const ITEM_MARK = '-'
 
@@ -496,7 +499,7 @@ export const toTreeRows = (rows: readonly Row[], v: View, open: readonly string[
       arrow: row.hasChildren ? (row.isFolded ? '▸' : '▾') : '•',
       status: b.isPending ? `${glyph('note')} …` : statusText(st),
       ...(badge === undefined ? {} : { badge }),
-      title: b.title,
+      title: b.title === '' ? UNTITLED : b.title,
       isContext: row.isContext,
       lines: lines.map(line => ({
         text: line.bullet === true ? (line.parts[0]?.text ?? '') : lineText(line),

@@ -19,6 +19,8 @@ export type StatusInfo = {
   meaning: string
   /** 停下来等我处理的：算进「需要我做的」 */
   isForMe?: true
+  /** 只给我验收时用，总结的模型不挑这个状态 */
+  isVerdict?: true
 }
 
 export const STATUS_INFO: Record<Status, StatusInfo> = {
@@ -26,6 +28,8 @@ export const STATUS_INFO: Record<Status, StatusInfo> = {
   TODOFORAI: { label: 'Todo4AI', color: '#5c86b4', group: 'inactive', icon: 'bot', meaning: '留给 AI 之后去做的事' },
   DOING: { label: 'Doing', color: '#c8635f', group: 'active', icon: 'doing', meaning: '还没做完，下一轮接着做' },
   TOREVIEW: { label: 'ToReview', color: '#b39a3e', group: 'inactive', icon: 'review', meaning: '做完了，等用户看一眼结果', isForMe: true },
+  REWORK: { label: 'Rework', color: '#c27c4e', group: 'inactive', icon: 'rework', meaning: '用户验收时认为方向对、细节要改', isVerdict: true },
+  UNCLEAR: { label: 'Unclear?', color: '#7d8fb3', group: 'inactive', icon: 'unclear', meaning: '用户没看懂做了什么，等解释', isVerdict: true },
   NEEDOK: { label: 'NeedOK?', color: '#bf7a45', group: 'inactive', icon: 'needok', meaning: '停在等用户批准、确认或选择上', isForMe: true },
   ERRORED: { label: 'Errored', color: '#93606b', group: 'inactive', icon: 'errored', meaning: '出错停下了，需要用户处理', isForMe: true },
   HITLIMIT: { label: 'Hit Limit!', color: '#8a5a8c', group: 'inactive', icon: 'hitlimit', meaning: '额度或用量上限到了，等重置' },
@@ -52,8 +56,8 @@ export const nextStatus = (st: Status): Status => {
   return 'DOING'
 }
 
-/** ⇧S / N 循环：只在不顺利的几个状态之间转 */
-export const BAD_STATUSES: readonly Status[] = ['FAILED', 'ERRORED', 'HITLIMIT', 'SUSPENDED', 'CANCELLED']
+/** N 循环：只在不顺利的几个状态之间转，从轻到重：要改、没看懂、没做成、出错、撞上限、搁置、不做了（⇧ 加首字母可以直接标） */
+export const BAD_STATUSES: readonly Status[] = ['REWORK', 'UNCLEAR', 'FAILED', 'ERRORED', 'HITLIMIT', 'SUSPENDED', 'CANCELLED']
 
 export const nextBadStatus = (st: Status): Status => BAD_STATUSES[(BAD_STATUSES.indexOf(st) + 1) % BAD_STATUSES.length]!
 
@@ -105,6 +109,8 @@ const BODY: Record<LucideIcon, string> = {
   errored: '<g class="shake">' + P('M3.85 8.62a4 4 0 0 1 4.78-4.77 4 4 0 0 1 6.74 0 4 4 0 0 1 4.78 4.78 4 4 0 0 1 0 6.74 4 4 0 0 1-4.77 4.78 4 4 0 0 1-6.75 0 4 4 0 0 1-4.78-4.77 4 4 0 0 1 0-6.76Z') + '<line x1="12" x2="12" y1="8" y2="12"/><line x1="12" x2="12.01" y1="16" y2="16"/></g>',
   hitlimit: P('m12 14 4-4', 'needle') + P('M3.34 19a10 10 0 1 1 17.32 0'),
   delegated: '<g class="fly">' + P('M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z') + P('m21.854 2.147-10.94 10.939') + '</g>',
+  rework: P('M13 21h8') + P('m15 5 4 4') + P('M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z', 'draw'),
+  unclear: P('M2.992 16.342a2 2 0 0 1 .094 1.167l-1.065 3.29a1 1 0 0 0 1.236 1.168l3.413-.998a2 2 0 0 1 1.099.092 10 10 0 1 0-4.777-4.719') + P('M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3', 'draw') + P('M12 17h.01'),
   queued: '<g class="ring">' + P('M18 20.5L19.5 22') + P('M6 20.5L4.5 22') + P('M21 13C21 17.968 16.968 22 12 22C7.032 22 3 17.968 3 13C3 8.032 7.032 4 12 4C16.968 4 21 8.032 21 13Z') + P('M15.339 15.862L12.549 14.197C12.063 13.909 11.667 13.216 11.667 12.649V8.95898') + '</g>' +
     '<g class="bells">' + P('M18 2L21.747 5.31064') + P('M6 2L2.25304 5.31064') + '</g>',
 }

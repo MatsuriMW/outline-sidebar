@@ -16,6 +16,8 @@ from align_icons import align
 
 pkgs, out = sys.argv[1], sys.argv[2]
 
+SPIN_BASE = 0x100120
+
 PHOSPHOR = {
     'did': 'wrench', 'files': 'file-text', 'conclusion': 'lightbulb', 'question': 'question',
     'resolved': 'seal-check', 'ask': 'chat-text', 'stats': 'chart-bar', 'tokens': 'database',
@@ -29,6 +31,7 @@ LUCIDE = {
     'todo': 'circle-dashed', 'bot': 'bot', 'doing': 'loader-circle', 'done': 'circle-check', 'paused': 'pause',
     'waiting': 'hourglass', 'suspended': 'snowflake', 'cancelled': 'ban', 'failed': 'x', 'review': 'eye',
     'needok': 'hand', 'errored': 'badge-alert', 'hitlimit': 'gauge', 'delegated': 'send', 'queued': 'alarm-clock',
+    'rework': 'pencil-line', 'unclear': 'message-circle-question',
 }
 
 
@@ -82,7 +85,8 @@ def build(src, icons, codes, base, family, path, spin=None):
         elif rec.nameID == 3:
             rec.string = f'{ps};2026-10-21'
     if spin is not None:
-        add_spin_frames(font, glyphs[base + list(icons).index(spin)], 0x100110, table)
+        # 转圈的帧放在 Lucide 图标后面留出的空当里，图标再多也不会撞上
+        add_spin_frames(font, glyphs[base + list(icons).index(spin)], SPIN_BASE, table)
     align(font)
     font.save(path)
     return table

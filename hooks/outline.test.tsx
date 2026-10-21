@@ -279,6 +279,14 @@ test('终端里的树：Logseq 式按键，⌘/ 切状态', async ($, on) => {
   await ui.key({ key: '/', ctrl: true, in: 'tree' })
   expect(await has(/Doing/)).toBe(true)
 
+  // ⇧ 加首字母直接标负面状态：终端报成大写字母，或者小写带 shift
+  await ui.key({ key: 'F', shift: true, in: 'tree' })
+  expect(await has(/Failed/)).toBe(true)
+  await ui.key({ key: 'c', shift: true, in: 'tree' })
+  expect(await has(/Cancelled/)).toBe(true)
+  await ui.key({ key: 'U', in: 'tree' })
+  expect(await has(/Unclear\?/)).toBe(true)
+
   // 数字键切视图：需要我做的
   await ui.key({ key: '2', in: 'tree' })
   expect(await has(/^确认第 4 档是什么$/)).toBe(true)
@@ -423,10 +431,10 @@ test('中文输入法下也能用：回车弹菜单改状态，空格展开详�
   await ui.key({ key: ' ', in: 'tree' })
   expect(await has(/默认全部/)).toBe(true)
 
-  // 回车弹菜单，往下选到 Failed，回车
+  // 回车弹菜单，往下选到 Failed，回车（详情之后是各个状态，Failed 排第 16 项）
   await ui.key({ key: 'return', in: 'tree' })
   expect(await has(/^详情$/)).toBe(true)
-  for (let i = 0; i < 14; i++) await ui.key({ key: 'down', in: 'tree' })
+  for (let i = 0; i < 16; i++) await ui.key({ key: 'down', in: 'tree' })
   await ui.key({ key: 'return', in: 'tree' })
   expect(await has(/^详情$/)).toBe(false)
   expect(await has(/Failed/)).toBe(true)
@@ -484,11 +492,13 @@ test('「做了」挂证据；ToReview 先看证据才能改成 Done；⇧S 在�
   await $.prompt.submit({ text: '继续' } as never)
   expect(contexts.at(-1)?.join('')).toContain('用户看过证据后验收；其中这几条没有工具调用能证明：顺手优化了性能')
 
-  // 负面状态循环：Failed → Errored → Hit Limit! → Suspended → Cancelled → Failed
+  // 负面状态循环，从轻到重：Rework → Unclear? → Failed → Errored → Hit Limit! → Suspended → Cancelled
+  await ui.press({ key: 'status-bad' })
+  expect(await has(/^Rework$/)).toBe(true)
+  await ui.press({ key: 'status-bad' })
+  expect(await has(/^Unclear\?$/)).toBe(true)
   await ui.press({ key: 'status-bad' })
   expect(await has(/^Failed$/)).toBe(true)
-  await ui.press({ key: 'status-bad' })
-  expect(await has(/^Errored$/)).toBe(true)
 
   // 指标：3 条「做了」2 条有证据；验收 1 块、没拦下；Done 之后重开了 1 块
   await ui.press({ key: 'view-tech' })
@@ -505,24 +515,57 @@ test('验收没通过：停手 4 秒后交给 Claude，按最终状态说清返�
   await ui.press({ key: 'view-all' })
   const sent = prompts.length
 
-  // ToReview → Failed → Errored：连按的时候不发，停手 4 秒后按最终的 Errored 发一条
+  // ToReview → Rework → Unclear?：连按的时候不发，停手 4 秒后按最终的 Unclear? 发一条
   await ui.press({ key: 'status-bad' })
   await clock.advance(2000)
   await ui.press({ key: 'status-bad' })
-  expect(await has(/^Errored$/)).toBe(true)
+  expect(await has(/^Unclear\?$/)).toBe(true)
   await clock.advance(3000)
   expect(prompts.length).toBe(sent)
   await clock.advance(2000)
   expect(prompts.length).toBe(sent + 1)
   expect(prompts.at(-1)).toContain('没让下面这些事通过')
-  expect(prompts.at(-1)).toContain('「把测试修好」：Errored。出错卡住了')
-  expect(prompts.at(-1)).not.toContain('Failed')
+  expect(prompts.at(-1)).toContain('「把测试修好」：Unclear?。我没看懂你做了什么')
+  expect(prompts.at(-1)).not.toContain('Rework')
   // 状态改动本身也作为结构化信息接在这条消息后面
-  expect(prompts.at(-1)).toContain('TOREVIEW → ERRORED')
+  expect(prompts.at(-1)).toContain('TOREVIEW → UNCLEAR')
 
   // 又改回 Done：看最终状态，不发
   await ui.press({ key: 'status' })
   await clock.advance(5000)
   expect(prompts.length).toBe(sent + 1)
+  await ui.unmount()
+})
+
+test('一次打回好几件：消息里让 Claude 把互不相干的交给子代理并行做；只打回一件就不提', async ($, on) => {
+  const reply = (title: string) => ({ title, status: 'TOREVIEW', did: [], conclusion: '', questions: [], needsMe: [], parent: null, resolved: [] })
+  const clock = engine(on, [], {}, [reply('修登录页'), reply('改导出格式')])
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  for (const [turnId, text] of [['t1', '修登录页'], ['t2', '改导出格式']] as const) {
+    await $.turn.start({ text, turnId })
+    await $.turn.complete({ answer: '好了', durationMs: 1000, isAborted: false, turnId, reason: 'answer', usage: { ...USAGE, model: 'claude-opus-5-5' } })
+    await clock.settle()
+  }
+  const ui = await $.ui.mount({ ...PANE, surface: 'vscode' })
+  await ui.press({ key: 'view-all' })
+  const sent = prompts.length
+
+  // 两块都打回成 Rework → Unclear? → Failed
+  for (const key of ['block-b1', 'block-b2']) {
+    await ui.press({ key })
+    for (let i = 0; i < 3; i++) await ui.press({ key: 'status-bad' })
+  }
+  await clock.advance(5000)
+  expect(prompts.length).toBe(sent + 1)
+  expect(prompts.at(-1)).toContain('「修登录页」：Failed')
+  expect(prompts.at(-1)).toContain('「改导出格式」：Failed')
+  expect(prompts.at(-1)).toContain('开子代理（Agent 工具）并行处理')
+
+  // 只打回一件：不提子代理
+  await ui.press({ key: 'block-b1' })
+  await ui.press({ key: 'status' })
+  await ui.press({ key: 'status' })
+  await ui.press({ key: 'status' })
+  await clock.advance(5000)
   await ui.unmount()
 })

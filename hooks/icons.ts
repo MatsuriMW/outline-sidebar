@@ -4,7 +4,7 @@
 
 export type PhosphorIcon = 'did' | 'files' | 'conclusion' | 'question' | 'resolved' | 'ask' | 'stats' | 'tokens' | 'cache' | 'time' | 'model' | 'skills' | 'mcp' | 'slash' | 'agents' | 'outline' | 'live' | 'last' | 'note' | 'recap' | 'total' | 'empty' | 'folder' | 'celebrate' | 'pending' | 'past' | 'dot' | 'spinner'
 
-export type LucideIcon = 'todo' | 'bot' | 'doing' | 'done' | 'paused' | 'waiting' | 'suspended' | 'cancelled' | 'failed' | 'review' | 'needok' | 'errored' | 'hitlimit' | 'delegated' | 'queued'
+export type LucideIcon = 'todo' | 'bot' | 'doing' | 'done' | 'paused' | 'waiting' | 'suspended' | 'cancelled' | 'failed' | 'review' | 'needok' | 'errored' | 'hitlimit' | 'delegated' | 'queued' | 'rework' | 'unclear'
 
 /** Phosphor 图标在字体里的字（终端用） */
 export const PH: Record<PhosphorIcon, string> = {
@@ -55,10 +55,12 @@ export const LU: Record<LucideIcon, string> = {
   hitlimit: String.fromCodePoint(0x10010c), // gauge
   delegated: String.fromCodePoint(0x10010d), // send
   queued: String.fromCodePoint(0x10010e), // alarm-clock
+  rework: String.fromCodePoint(0x10010f), // pencil-line
+  unclear: String.fromCodePoint(0x100110), // message-circle-question
 }
 
 /** Doing 的 loader-circle 转 8 个角度，终端里按节拍轮流显示 */
-export const SPIN = [String.fromCodePoint(0x100110), String.fromCodePoint(0x100111), String.fromCodePoint(0x100112), String.fromCodePoint(0x100113), String.fromCodePoint(0x100114), String.fromCodePoint(0x100115), String.fromCodePoint(0x100116), String.fromCodePoint(0x100117)]
+export const SPIN = [String.fromCodePoint(0x100120), String.fromCodePoint(0x100121), String.fromCodePoint(0x100122), String.fromCodePoint(0x100123), String.fromCodePoint(0x100124), String.fromCodePoint(0x100125), String.fromCodePoint(0x100126), String.fromCodePoint(0x100127)]
 
 /** Phosphor 图标的 SVG 路径（桌面版用），方框是 0..size */
 export const PH_SVG: Record<PhosphorIcon, { path: string; size: number }> = {
