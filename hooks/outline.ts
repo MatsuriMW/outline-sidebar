@@ -181,14 +181,31 @@ export const parseKey = (key: string) => {
   return at < 0 ? { blockId: key } : { blockId: key.slice(0, at), index: Number(key.slice(at + 1)) }
 }
 
-/** 层级「去掉 Done」藏起来的状态：做完的、不做了的、我已经答过是或否的 */
+/** 已了结的状态：做完的、不做了的、我已经答过是或否的。层级「去掉 Done」藏起来，整棵都是这些的子树自动折叠 */
 const SETTLED: readonly Status[] = ['DONE', 'CANCELLED', 'YES', 'NO']
+
+/** 这一块连同它的「需要我做」条目、所有子孙都了结了 */
+const isSettledTree = (list: readonly Block[], b: Block): boolean =>
+  SETTLED.includes(b.status) &&
+  b.live === undefined &&
+  !b.isPending &&
+  b.needsMe.every((_, i) => SETTLED.includes(itemStatus(b, i))) &&
+  childrenOf(list, b.id).every(kid => isSettledTree(list, kid))
+
+/** 自动折叠只在看当前进度的视图里生效 */
+const AUTO_FOLD_VIEWS: readonly View[] = ['me', 'asks', 'all']
+
+/** 自动折叠：整棵都了结的块折起来，除了我手动打开过的（unfolded）和先别折的（hold：光标所在的块、它的祖先、光标刚离开还在缓冲的） */
+export type AutoFold = { unfolded: readonly string[]; hold: readonly string[] }
 
 /**
  * 按视图把树摊成可见的行。除「全部」外都是 sparse tree：命中的块和它们的祖先，其余不显示。
  * hideDone（层级「去掉 Done」）：已了结的块和「需要我做」条目也不算命中，块下面还有没了结的子块时留着当上下文
  */
-export const visibleRows = (list: readonly Block[], v: View, folded: readonly string[], zoom: string | null, open: readonly string[] = [], hideDone = false): Row[] => {
+export const visibleRows = (list: readonly Block[], v: View, folded: readonly string[], zoom: string | null, open: readonly string[] = [], hideDone = false, auto?: AutoFold): Row[] => {
+  // 「结论」「它已做的」「技术信息」本来就是看做完的事，不自动折
+  const isAutoFolded = (b: Block) =>
+    auto !== undefined && AUTO_FOLD_VIEWS.includes(v) && !auto.unfolded.includes(b.id) && !auto.hold.includes(b.id) && isSettledTree(list, b)
   const isFiltered = v !== 'all' || hideDone
   const hit = (b: Block) => matches(b, v) && !(hideDone && SETTLED.includes(b.status))
   const keep = new Set<string>()
@@ -217,7 +234,7 @@ export const visibleRows = (list: readonly Block[], v: View, folded: readonly st
       ? b.needsMe.map((text, index) => ({ block: b, item: { index, text, status: itemStatus(b, index) } })).filter(one => !(hideDone && SETTLED.includes(one.item.status)))
       : []
     const kids: Node[] = [...items, ...shown(childrenOf(list, b.id)).map(block => ({ block }))]
-    const isFolded = folded.includes(b.id) && kids.length > 0
+    const isFolded = kids.length > 0 && (folded.includes(b.id) || isAutoFolded(b))
     rows.push({
       block: b,
       key: b.id,

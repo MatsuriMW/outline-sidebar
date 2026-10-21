@@ -105,6 +105,9 @@ test('三轮对话：视图、子任务、技术信息、待办消解、导出�
 
   await ui.press({ key: 'view-all' })
   expect(await has(/给随机漫步加时间筛选/)).toBe(true)
+  // 整棵都做完的块自动折起来：b2 下面的子任务先看不到；光标挪到 b2 上就不折
+  expect(await has(/查 Hexo 文档/)).toBe(false)
+  await ui.press({ key: 'block-b2' })
   expect(await has(/\[子任务\]/)).toBe(true)
   expect(await has(/查 Hexo 文档/)).toBe(true)
   expect(await has(/^Done$/)).toBe(true)
@@ -748,5 +751,45 @@ test('「需要我做」里交给我做的事答 Yes 不单独发；问我的问
   expect(prompts.at(-1)).toContain('回一句「收到」就行')
   // 前面那条交给我做的事，作为状态改动一起带上
   expect(prompts.at(-1)).toContain('「重开终端看效果」')
+  await ui.unmount()
+})
+
+test('自动折叠：整棵都了结的块，光标离开 3 秒后折起来；手动打开过的不再自动折；结论视图不折', async ($, on) => {
+  const reply = (title: string, status: string, parent: string | null) => ({ title, status, did: [], conclusion: `${title}的结论`, questions: [], needsMe: [], parent, resolved: [] })
+  const clock = engine(on, [], {}, [reply('母块', 'DONE', null), reply('子块', 'DOING', 'b1'), reply('别的事', 'DOING', null)])
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  for (const turnId of ['t1', 't2', 't3']) {
+    await $.turn.start({ text: '做点事', turnId })
+    await $.turn.complete({ answer: '好了', durationMs: 1000, isAborted: false, turnId, reason: 'answer', usage: { ...USAGE, model: 'claude-opus-5-5' } })
+    await clock.settle()
+  }
+  const ui = await $.ui.mount({ ...PANE, surface: 'vscode' })
+  const has = async (text: RegExp) => (await ui.find({ type: 'Text', text })) !== undefined
+  await ui.press({ key: 'view-all' })
+
+  // 把最后一个没做完的子块标成 Done：光标还在它上面，先不折
+  await ui.press({ key: 'block-b2' })
+  await ui.press({ key: 'done' })
+  expect(await has(/^子块$/)).toBe(true)
+  // 光标挪开：3 秒缓冲期里还在，过了才折
+  await ui.press({ key: 'block-b3' })
+  await clock.advance(2000)
+  expect(await has(/^子块$/)).toBe(true)
+  await clock.advance(2000)
+  expect(await has(/^子块$/)).toBe(false)
+  expect(await has(/^母块$/)).toBe(true)
+
+  // 结论视图不自动折：做完的事本来就是要看的
+  await ui.press({ key: 'view-conclusions' })
+  expect(await has(/^子块$/)).toBe(true)
+
+  // 手动打开过的，光标走开也不再自动折
+  await ui.press({ key: 'view-all' })
+  await ui.press({ key: 'block-b1' })
+  await ui.press({ key: 'unfold-down' })
+  expect(await has(/^子块$/)).toBe(true)
+  await ui.press({ key: 'block-b3' })
+  await clock.advance(5000)
+  expect(await has(/^子块$/)).toBe(true)
   await ui.unmount()
 })

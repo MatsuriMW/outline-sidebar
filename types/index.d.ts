@@ -139,6 +139,10 @@ declare module 'claude-code' {
       blocks: Block[]
       /** 子块被折起来的块 */
       folded: string[]
+      /** 整棵都了结、本该自动折起来，但我手动打开过的块：不再自动折 */
+      unfolded: string[]
+      /** 光标刚离开的块（连同祖先）先别自动折，到这个时间为止 */
+      lingering: Record<string, number>
       /** 展开了详情字段的块 */
       open: string[]
       view: View

@@ -34,6 +34,7 @@ import {
   parseKeys,
   sumTech,
   techLines,
+  type AutoFold,
   addMetrics,
   measure,
   metricsLines,
@@ -54,6 +55,8 @@ const TREE = 'tree'
 
 const blocks = atom({ plugin: 'outline-sidebar', key: 'blocks' } as const, [])
 const folded = atom({ plugin: 'outline-sidebar', key: 'folded' } as const, [])
+const unfolded = atom({ plugin: 'outline-sidebar', key: 'unfolded' } as const, [])
+const lingering = atom({ plugin: 'outline-sidebar', key: 'lingering' } as const, {})
 const open = atom({ plugin: 'outline-sidebar', key: 'open' } as const, [])
 const view = atom({ plugin: 'outline-sidebar', key: 'view' } as const, 'all')
 const level = atom({ plugin: 'outline-sidebar', key: 'level' } as const, 'contents')
@@ -481,7 +484,48 @@ const toggle = (list: readonly string[] | undefined, id: string) =>
   (list ?? []).includes(id) ? (list ?? []).filter(one => one !== id) : [...(list ?? []), id]
 
 async function currentRows($: EngineInterface) {
-  return visibleRows(await read($, blocks), await read($, view), await read($, folded), await read($, zoom), await read($, open), await isHidingDone($))
+  return visibleRows(await read($, blocks), await read($, view), await read($, folded), await read($, zoom), await read($, open), await isHidingDone($), await autoFold($))
+}
+
+// ---------- 自动折叠 ----------
+
+/** 光标离开一棵已了结的子树后，等这么久再自动折，给个缓冲 */
+const FOLD_DELAY = 3000
+
+/** 自动折叠用的：我手动打开过的块，和先别折的块（光标所在的块和它的祖先，加上光标刚离开、还在缓冲期的） */
+async function autoFold($: EngineInterface): Promise<AutoFold> {
+  const all = await read($, blocks)
+  const key = await read($, cursor)
+  const now = await $.clock.now()
+  const hold = Object.entries(await read($, lingering)).filter(([, until]) => until > now).map(([id]) => id)
+  const at = key === null ? undefined : all.find(b => b.id === parseKey(key).blockId)
+  if (at !== undefined) hold.push(at.id, ...ancestorsOf(all, at).map(b => b.id))
+  return { unfolded: await read($, unfolded), hold }
+}
+
+/** 挪光标：刚离开的那一块和它的祖先先缓冲一会儿，到点再重画，该折的才折起来 */
+async function setCursor($: EngineInterface, key: string | null) {
+  const before = await read($, cursor)
+  await update($, cursor, () => key)
+  if (before === null || before === key) return
+  const all = await read($, blocks)
+  const left = all.find(b => b.id === parseKey(before).blockId)
+  if (left === undefined) return
+  const until = (await $.clock.now()) + FOLD_DELAY
+  await update($, lingering, map => ({ ...map, ...Object.fromEntries([left, ...ancestorsOf(all, left)].map(b => [b.id, until])) }))
+  $.clock.after(FOLD_DELAY, () => void expireLingering($))
+}
+
+async function expireLingering($: EngineInterface) {
+  const now = await $.clock.now()
+  await update($, lingering, map => Object.fromEntries(Object.entries(map ?? {}).filter(([, until]) => until > now)))
+  await keepCursorVisible($)
+}
+
+/** 折起或打开一块。打开的记进 unfolded：整棵都了结的块被我打开过，就不再自动折 */
+async function setFold($: EngineInterface, id: string, isFold: boolean) {
+  await update($, folded, ids => (isFold ? ((ids ?? []).includes(id) ? (ids ?? []) : [...(ids ?? []), id]) : (ids ?? []).filter(one => one !== id)))
+  await update($, unfolded, ids => (isFold ? (ids ?? []).filter(one => one !== id) : (ids ?? []).includes(id) ? (ids ?? []) : [...(ids ?? []), id]))
 }
 
 /** 光标可能停在「需要我做」的某一条上；块一级的操作（折叠、缩进、聚焦…）作用在它所在的块 */
@@ -496,7 +540,7 @@ async function moveCursor($: EngineInterface, step: number) {
   const id = await read($, cursor)
   const at = rows.findIndex(r => r.key === id)
   const next = at < 0 ? (step > 0 ? 0 : rows.length - 1) : Math.min(rows.length - 1, Math.max(0, at + step))
-  await update($, cursor, () => rows[next]!.key)
+  await setCursor($, rows[next]!.key)
 }
 
 /** 换了视图，光标要是不在这个视图的行里，就放到第一行 */
@@ -505,7 +549,7 @@ async function keepCursorInView($: EngineInterface) {
   const key = await read($, cursor)
   if (rows.some(r => r.key === key)) return
   const first = rows.find(r => !r.isContext) ?? rows[0]
-  await update($, cursor, () => first?.key ?? null)
+  await setCursor($, first?.key ?? null)
 }
 
 async function switchView($: EngineInterface, v: View) {
@@ -578,17 +622,16 @@ async function pick($: EngineInterface, key: string) {
       await update($, open, ids => toggle(ids, blockId))
       if ((await read($, open)).includes(blockId)) await markReviewed($, blockId)
     }
-  } else await update($, cursor, () => key)
+  } else await setCursor($, key)
 }
 
 async function toggleFold($: EngineInterface, force?: boolean) {
   const id = await cursorBlockId($)
   if (id === null) return
-  await update($, folded, ids => {
-    const has = (ids ?? []).includes(id)
-    const want = force ?? !has
-    return want === has ? (ids ?? []) : toggle(ids, id)
-  })
+  // 看眼下是不是折着（手动折的、自动折的都算），不是只看折叠列表
+  const isFolded = (await currentRows($)).find(r => r.key === id)?.isFolded ?? false
+  const want = force ?? !isFolded
+  if (want !== isFolded) await setFold($, id, want)
   await keepCursorVisible($)
 }
 
@@ -606,19 +649,19 @@ async function foldUp($: EngineInterface) {
   // 聚焦时，聚焦的那块就是顶，不再往上
   const target = index !== undefined ? b.id : b.parent !== null && b.id !== (await read($, zoom)) ? b.parent : null
   if (target === null) return toggleFold($)
-  await update($, folded, ids => ((ids ?? []).includes(target) ? (ids ?? []) : [...(ids ?? []), target]))
-  await update($, cursor, () => target)
+  await setFold($, target, true)
+  await setCursor($, target)
 }
 
 /** E：和 T 反过来，展开光标所在的块，光标跳到它的第一个子块上；再按就再往下一层 */
 async function unfoldDown($: EngineInterface) {
   const id = await cursorBlockId($)
   if (id === null) return
-  await update($, folded, ids => (ids ?? []).filter(one => one !== id))
+  await setFold($, id, false)
   const rows = await currentRows($)
   const at = rows.findIndex(r => r.key === id)
   const below = rows[at + 1]
-  if (at >= 0 && below !== undefined && parseKey(below.key).blockId !== id && below.block.parent === id) await update($, cursor, () => below.key)
+  if (at >= 0 && below !== undefined && parseKey(below.key).blockId !== id && below.block.parent === id) await setCursor($, below.key)
 }
 
 /** ⌥1 / ⌥2 / ⌥3：整棵大纲展开到第几层，更深的折起来 */
@@ -626,6 +669,8 @@ async function showDepth($: EngineInterface, depth: number) {
   const all = await read($, blocks)
   const atDepth = all.filter(b => ancestorsOf(all, b).length === depth - 1 && (childrenOf(all, b.id).length > 0 || b.needsMe.length > 0))
   await update($, folded, () => atDepth.map(b => b.id))
+  // 指定了层数就照办：这一层以上都打开，自动折叠不再插手
+  await update($, unfolded, () => all.filter(b => ancestorsOf(all, b).length < depth - 1).map(b => b.id))
   await keepCursorVisible($)
   $.ui.toast(`展开到第 ${depth} 层`)
 }
@@ -858,6 +903,8 @@ async function cycleLevel($: EngineInterface) {
   await update($, level, () => next)
   await update($, folded, () => (next === 'overview' ? all.filter(b => childrenOf(all, b.id).length > 0).map(b => b.id) : []))
   await update($, open, () => (next === 'all' ? all.map(b => b.id) : []))
+  // 「全部展开」照办，别的档位交还给自动折叠
+  await update($, unfolded, () => (next === 'all' ? all.map(b => b.id) : []))
   await keepCursorVisible($)
   $.ui.toast(LEVEL_LABEL[next])
 }
@@ -871,7 +918,7 @@ async function keepCursorVisible($: EngineInterface) {
   const b = all.find(one => one.id === parseKey(key).blockId)
   const seen = b === undefined ? [] : [b, ...ancestorsOf(all, b).reverse()]
   const visible = seen.find(one => rows.some(r => r.key === one.id))
-  if (visible !== undefined) await update($, cursor, () => visible.id)
+  if (visible !== undefined) await setCursor($, visible.id)
   else await keepCursorInView($)
 }
 
@@ -1484,7 +1531,7 @@ export const register: Register = (on, options) => {
     // 视图栏的高亮只在终端的树里有意义（别的界面是按钮，焦点由界面自己管）
     const isTabs = e.surface === 'terminal' && (await read($, scope)) === 'tabs'
 
-    const rows = visibleRows(list, v, foldedIds, zoomId, openIds, await isHidingDone($))
+    const rows = visibleRows(list, v, foldedIds, zoomId, openIds, await isHidingDone($), await autoFold($))
     const zoomed = zoomId === null ? undefined : list.find(b => b.id === zoomId)
     const waiting = waitingCount(list)
     const total = v === 'tech' ? sumTech(list) : undefined
