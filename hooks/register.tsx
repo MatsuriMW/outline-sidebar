@@ -611,6 +611,9 @@ let isBuildTried = false
 /** 面板上一次画的时候有没有键盘，用来只在刚拿到键盘那一下切输入法 */
 let isPaneFocused = false
 
+/** 终端里大纲树（Client）要的数据：画面板的钩子算好放这里，外层的终端钩子拿去画树 */
+let paneTree: TreeProps | undefined
+
 /**
  * 点进大纲树时切到英文键盘：中文输入法开着，J/K、T 这些字母会被拿去组字。
  * 用 tools/ascii-input.swift（第一次用时编译到 bin/），只在 macOS 上，失败了也不打扰。
@@ -1560,6 +1563,21 @@ export const register: Register = (on, options) => {
 
   // ---------- 大纲面板 ----------
 
+  // 终端：大纲树是自绘区域（Client）。单独一个钩子，在最外层一次从 $.ui.resolve(e) 取出 Client，目录才认得出这里加载的是 ./tree-view.tsx；
+  // 上面那一截（视图栏、工具栏、回顾……）照旧由下面的钩子画。同一个模块里先注册的钩子在外层
+  on('ui.render', { component: 'Pane', requestId: PANE, surface: 'terminal' }, async ($, e, next) => {
+    const { Box, Client } = $.ui.resolve(e)
+    paneTree = undefined
+    const header = await next(e)
+    if (paneTree === undefined) return header
+    return (
+      <Box flexDirection="column" width={e.props.bodyColumns}>
+        {header}
+        <Client module="./tree-view.tsx" key={TREE} props={paneTree} width={e.props.bodyColumns} />
+      </Box>
+    )
+  })
+
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const els = $.ui.resolve(e)
     const { Box, Text, Button } = els
@@ -1713,8 +1731,6 @@ export const register: Register = (on, options) => {
 
     // 终端里用树视图接 Logseq 式按键（中文输入法下也能用）；别的界面退回成按钮
     if (e.surface === 'terminal') {
-      // 判断 e.surface 后直接从 $.ui.resolve(e) 解构，目录才认得出这里加载的是 ./tree-view.tsx
-      const { Client } = $.ui.resolve(e)
       const viewLabels = keys.map((one, i) => `${i + 1}: ${viewLabel(one, waiting)}`)
       const actionLabels = ACTIONS.map(a => `${a.hotkey}: ${actionLabel(a, zoomId !== null, isBodyAll)}`)
       const headerRows =
@@ -1730,7 +1746,7 @@ export const register: Register = (on, options) => {
       const height = Math.max(6, e.props.scroll.bodyRows - headerRows)
       const wheelAt = await read($, wheel)
       const levelNow = await read($, level)
-      const treeProps: TreeProps = {
+      paneTree = {
         rows: toTreeRows(rows, v, openIds, at, now),
         height,
         scope: isTabs ? 'tabs' : 'tree',
@@ -1739,10 +1755,10 @@ export const register: Register = (on, options) => {
         itemMenu: itemMenu(),
         ...(empty === undefined ? {} : { empty }),
       }
+      // 树由外层的终端钩子接着画
       return (
         <Box flexDirection="column" width={width}>
           {header}
-          <Client module="./tree-view.tsx" key={TREE} props={treeProps} width={width} />
         </Box>
       )
     }
