@@ -1,7 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
-import { wrapCells } from '../hooks/outline'
+import { compactSentText, wrapCells } from '../hooks/outline'
 
 const PANE = {
   plugin: 'outline-sidebar',
@@ -17,7 +17,7 @@ const PANE = {
   },
 } as const
 
-const USAGE = { input_tokens: 100, output_tokens: 200, cache_read_input_tokens: 900, cache_creation_input_tokens: 0 }
+const USAGE ={ input_tokens: 100, output_tokens: 200, cache_read_input_tokens: 900, cache_creation_input_tokens: 0 }
 
 const REPLIES = () => [
   { title: '给随机漫步加时间筛选', status: 'WAITING', did: ['加了 7 天 / 1 个月 / 全部三档'], conclusion: '默认全部', questions: [], needsMe: ['确认第 4 档是什么'], asks: [0], parent: null, resolved: [] },
@@ -178,8 +178,8 @@ test('「需要我做」的每一条能单独改状态', async ($, on) => {
   // S 切状态：Done → Todo（照 todoseq 的流转）
   await ui.press({ key: 'status' })
   expect(await has(/^Todo$/)).toBe(true)
-  // 角标跟着这一条走
-  expect(await has(/^ 1$/)).toBe(true)
+  // 角标跟着这一条走（并在视图名后面，按钮里的字只用一种样式）
+  expect(await has(/^需要我做的 1$/)).toBe(true)
   // 块本身的状态没动
   await ui.press({ key: 'view-all' })
   expect(await has(/^Done$/)).toBe(true)
@@ -323,6 +323,13 @@ test('视图栏和树分两层：数字选视图、⏎ 进入、⌫ 回视图栏
   await ui.unmount()
 })
 
+test('终端里视图栏、工具栏都是按钮：侧栏有键盘、树没有时，数字和 J / K / E 这些字母也有按钮接住，不会掉回对话框', async ($, on) => {
+  const clock = engine(on, [])
+  await play($, clock)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  for (const key of ['view-all', 'down', 'up', 'unfold-down', 'fold-up']) expect(await ui.press({ key })).toBeDefined()
+  await ui.unmount()
+})
 test('正文折叠：消息改成一行摘要，这一轮的工具行藏起来', async ($, on) => {
   // 测试里没有真实的消息行，用一份带消息 id 的存档代替
   const saved = (id: string, title: string, messageId: string, rowIds: string[]) => ({
@@ -880,5 +887,62 @@ test('手动把「需要我做」的最后一条标完，在等我的块跟着 D
   }
   expect(await has(/^Waiting$/)).toBe(false)
   expect(await has(/^ToReview$/)).toBe(true)
+  await ui.unmount()
+})
+
+test('侧栏替我发的消息在对话里只画要点，ctrl+o 看全文；别处来的消息不动', async ($, on) => {
+  const sent = [
+    '我在大纲侧栏里回答了你问的这些事，请照着接着做：',
+    '- 「要我现在提交并推到 GitHub 吗」（块 [b2]「修复官方审核报告的三条阻断与策略问题」）：Yes。我的回答是「是」，同意。照这个接着做。',
+    '- 块 [b3]「改 README」：Rework。方向对，细节要改。',
+    '',
+    '这些回答要是不需要你再做什么，回一句「收到」就行，别展开。',
+    '',
+    '用户在会话大纲侧栏里手动改了下面这些状态。这是用户在告诉你进展：DONE 是认可做完。据此接着做，不用复述这段说明。',
+    '- 需要用户做的「在开发者门户重新提交审核」（块 [b4]「升版本到 0.9.4」）：TODO → DONE',
+    '- 块 [b4]「升版本到 0.9.4」（用户看过证据后验收；其中这几条没有工具调用能证明：跑了测试）：TOREVIEW → DONE',
+  ].join('\n')
+  expect(compactSentText(sent)).toBe(
+    [
+      '我在大纲侧栏里回答了你问的这些事，请照着接着做：',
+      '- 「要我现在提交并推到 GitHub 吗」：Yes',
+      '- 块 [b3]「改 README」：Rework',
+      '- 需要用户做的「在开发者门户重新提交审核」：TODO → DONE',
+      '- 块 [b4]「升版本到 0.9.4」：TOREVIEW → DONE',
+    ].join('\n'),
+  )
+
+  engine(on, [])
+  // 引擎这一侧：照传过来的 text 画
+  on('ui.render', ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>{String((e.props as { text?: string }).text ?? 'engine')}</Text>
+  })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  const drawn = async (origin: unknown, isExpanded = false) => {
+    const row = await $.ui.mount({ plugin: 'outline-sidebar', surface: 'terminal', component: 'UserMessage', requestId: 'm1', props: { text: sent, origin, isExpanded } } as never)
+    const text = (await row.find({ type: 'Text', text: /我在大纲侧栏里/ }))?.text
+    await row.unmount()
+    return text
+  }
+  expect(await drawn({ kind: 'plugin', name: 'outline-sidebar' })).toBe(compactSentText(sent))
+  expect(await drawn({ kind: 'plugin', name: 'outline-sidebar' }, true)).toBe(sent)
+  expect(await drawn({ kind: 'composer' })).toBe(sent)
+})
+
+test('会话的名字画在大纲最上面当标题：顶格、加粗；改名了跟着变', async ($, on) => {
+  const clock = engine(on, [])
+  // 引擎这一侧：没有设置里的 hook，什么都不拦
+  on('classic.UserPromptSubmit', () => ({}))
+  await play($, clock)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const classic = ($ as any).classic
+  await classic.UserPromptSubmit({ prompt: '继续', session_title: '整理大纲侧栏' })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  const first = async () => (await ui.findAll({ type: 'Text' }))[0]
+  expect((await first())?.text).toBe('整理大纲侧栏')
+  expect((await first())?.props).toMatchObject({ bold: true })
+  await classic.UserPromptSubmit({ prompt: '再继续', session_title: '修审核报告' })
+  expect((await first())?.text).toBe('修审核报告')
   await ui.unmount()
 })

@@ -141,10 +141,6 @@ export type AgendaGroup = { sid: string; label: string; isCurrent: boolean; item
 
 declare module 'claude-code' {
   interface PluginState {
-    /** 改名前的插件（org-inspired-chat）；只在启动时读一次，把当前会话的大纲接过来 */
-    'org-inspired-chat': {
-      blocks: Block[]
-    }
     'outline-sidebar': {
       blocks: Block[]
       /** 子块被折起来的块 */
@@ -178,6 +174,8 @@ declare module 'claude-code' {
       scope: 'tabs' | 'tree'
       /** 所有会话加起来的验收指标，切到技术信息视图时重算 */
       metricsAll: Metrics | null
+      /** 会话的名字（自动起的或 /rename 改的），画在大纲最上面；还没有名字时是 null */
+      sessionTitle: string | null
     }
   }
 }

@@ -279,6 +279,7 @@ AI 时代，最珍贵的是人类完整的、不被切分的注意力（undivide
 | 钩子 | 做什么 |
 |---|---|
 | `session.start` | 注册 `/outline`、`/agenda` 两个命令，从本地存档恢复这个会话的大纲，打开侧栏 |
+| `classic.SessionStart`、`classic.UserPromptSubmit` | 只读里面的会话名字（`session_title`），画在大纲最上面当标题；照常放行，不拦、不改 |
 | `command.run`（`outline`、`agenda`） | 回答这两个命令：打开面板、导出大纲、汇总待办 |
 | `command.run`（`btw`） | `/btw` 照常执行，答完以后在大纲里记一块；不改命令本身 |
 | `turn.start`、`turn.complete` | 一轮开始时建一个「进行中」的块，结束时记用量并调 Haiku 总结 |
@@ -286,7 +287,7 @@ AI 时代，最珍贵的是人类完整的、不被切分的注意力（undivide
 | `prompt.submit` | 你发消息时，把侧栏里改过的状态作为附加上下文带给 Claude；消息正文不改 |
 | `prompt.edit` | 从侧栏回到对话框时，第一个键用来把输入法切回去 |
 | `session.append` | 记下每一轮对应的消息 id（给「跳转」和「正文折叠」用）和 Claude 这一轮写出的文字（给总结和进度用），接住 Claude Code 自带的回顾显示在侧栏顶上；对话记录本身不改 |
-| `ui.render`（`UserMessage`、`AssistantMessage`、`ToolUse`、`ToolResult`） | 正文折叠：把折起来的那一轮画成一行摘要；没折叠的照原样画 |
+| `ui.render`（`UserMessage`、`AssistantMessage`、`ToolUse`、`ToolResult`） | 正文折叠：把折起来的那一轮画成一行摘要；没折叠的照原样画。侧栏替你发给 Claude 的消息只画要点（每条事和你的回答），ctrl+o 看全文；Claude 收到的是全文，只改显示 |
 | `ui.render`（`Pane`）、`ui.message`、`ui.scroll` | 画侧栏和 Agenda 面板，接收大纲树里的按键、点击和滚轮 |
 
 

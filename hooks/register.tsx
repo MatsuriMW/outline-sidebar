@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { Elements, EngineInterface, Register } from 'claude-code'
 
 import type { AgendaGroup, Block, Body, Evidence, Kind, Level, Metrics, Recap, Resolution, Status, StatusChange, Tech, View } from '../types'
-import type { Field, Line, MenuItem } from './outline'
+import type { Field, Line, MenuItem, TreeProps } from './outline'
 import { PH, PH_SVG } from './icons'
 import type { PhosphorIcon } from './icons'
 import { FIRE_MS, statusSvg } from './status'
@@ -31,6 +31,7 @@ import {
   childrenOf,
   clip,
   estimateWrappedRows,
+  compactSentText,
   isOpenStatus,
   matches,
   parseKeys,
@@ -75,9 +76,7 @@ const legend = atom({ plugin: 'outline-sidebar', key: 'legend' } as const, false
 const changes = atom({ plugin: 'outline-sidebar', key: 'changes' } as const, [])
 const scope = atom({ plugin: 'outline-sidebar', key: 'scope' } as const, 'tabs')
 const metricsAll = atom({ plugin: 'outline-sidebar', key: 'metricsAll' } as const, null)
-
-/** 面板上（键盘不在树里）按 ⏎：Claude Code 只让鼠标点击把键盘交给树 */
-const ENTER_TIP = '用鼠标点一下下面的大纲树，键盘就进去了；之后选视图、⏎ 进入、⌫ 返回都在树里完成，别按 Esc'
+const sessionTitle = atom({ plugin: 'outline-sidebar', key: 'sessionTitle' } as const, null)
 
 const LEVELS: Level[] = ['overview', 'contents', 'all', 'undone']
 const LEVEL_LABEL: Record<Level, string> = { overview: '只看顶层', contents: '全部标题', all: '全部展开', undone: '去掉 Done' }
@@ -110,6 +109,13 @@ const ACTIONS: { key: string; hotkey: string; label: string }[] = [
   { key: 'export', hotkey: 'x', label: '导出' },
   { key: 'legend', hotkey: 'i', label: '图例' },
 ]
+
+/** 视图名，「需要我做的」后面带还剩几件 */
+const viewLabel = (one: View, waiting: number) => `${VIEW_INFO[one].label}${one === 'me' && waiting > 0 ? ` ${waiting}` : ''}`
+
+/** 聚焦时「聚焦」变「退出聚焦」，正文全折时「正文全折」变「正文全开」 */
+const actionLabel = (a: (typeof ACTIONS)[number], isZoomed: boolean, isBodyAll: boolean) =>
+  a.key === 'zoom' && isZoomed ? '退出聚焦' : a.key === 'body-all' && isBodyAll ? '正文全开' : a.label
 
 /** 图例里列出的字段 */
 const LEGEND_FIELDS = ['needsMe', 'did', 'proof', 'files', 'conclusion', 'question', 'resolved', 'ask', 'live', 'last', 'note', 'stats', 'tokens', 'cache', 'time', 'model', 'skills', 'mcp', 'slash', 'agents', 'outline', 'coverage', 'review', 'reopen', 'fix'] as const
@@ -268,15 +274,7 @@ async function setBlocks($: EngineInterface, change: (list: Block[]) => Block[])
   await refreshBody($)
 }
 
-/** 改名前的插件在这个会话里记下的大纲 */
-const legacyBlocks = { plugin: 'org-inspired-chat', key: 'blocks' } as const
-
 async function restore($: EngineInterface) {
-  if ((await read($, blocks)).length === 0) {
-    const legacy = await $.state.get(legacyBlocks)
-    const old = legacy.value ?? []
-    if (old.length > 0) await update($, blocks, () => old.map(b => ({ ...b, kind: b.kind ?? 'turn', status: normalizeStatus(String(b.status)) })))
-  }
   const sid = await $.session.id()
   const stored = await $.store.get(`${STORE_PREFIX}${sid}`)
   const list = (stored as Saved | undefined)?.blocks
@@ -285,8 +283,8 @@ async function restore($: EngineInterface) {
     await update($, blocks, () => list.map(b => ({ ...b, kind: b.kind ?? 'turn', status: normalizeStatus(String(b.status)) })))
   }
   // 当前会话里已有的旧状态（CANCELED、DOING 以外的旧词）也换成新写法
-  const current = await read($, blocks)
-  if (current.some(b => !(STATUSES as string[]).includes(b.status))) {
+  const existing = await read($, blocks)
+  if (existing.some(b => !(STATUSES as string[]).includes(b.status))) {
     await update($, blocks, all => (all ?? []).map(b => ({ ...b, status: normalizeStatus(String(b.status)) })))
   }
 }
@@ -328,7 +326,6 @@ async function toggleBodyFoldAll($: EngineInterface) {
   await update($, bodyFoldAll, isOn => !isOn)
   await update($, bodyFolded, () => [])
   await refreshBody($)
-  $.ui.toast((await read($, bodyFoldAll)) ? '正文全折：除了最新一轮，每轮只留一行摘要' : '正文全部展开')
 }
 
 async function hideRow($: EngineInterface, requestId: string, isExpanded: boolean | undefined) {
@@ -704,7 +701,6 @@ async function showDepth($: EngineInterface, depth: number) {
   // 指定了层数就照办：这一层以上都打开，自动折叠不再插手
   await update($, unfolded, () => all.filter(b => ancestorsOf(all, b).length < depth - 1).map(b => b.id))
   await keepCursorVisible($)
-  $.ui.toast(`展开到第 ${depth} 层`)
 }
 
 async function toggleDetail($: EngineInterface) {
@@ -729,8 +725,6 @@ async function passesReview($: EngineInterface, b: Block, to: Status) {
   if (b.reviewedAt !== undefined && b.reviewedAt >= (b.statusAt ?? 0)) return true
   await update($, open, ids => (ids.includes(b.id) ? ids : [...ids, b.id]))
   await markReviewed($, b.id)
-  const bare = b.didEvidence === undefined ? 0 : b.didEvidence.filter(nums => nums.length === 0).length
-  $.ui.toast(bare > 0 ? `先看证据：已展开，有 ${bare} 条「做了」没有证据；看完再按一次才改成 Done` : '先看证据：已展开，看完再按一次才改成 Done')
   return false
 }
 
@@ -769,7 +763,6 @@ async function changeStatus($: EngineInterface, choose: (current: Status) => Sta
   if (index === undefined && target !== undefined && !(await passesReview($, target, choose(target.status)))) return
   let change: StatusChange | undefined
   let verdict: Status | undefined
-  let told = false
   await setBlocks($, all =>
     all.map(b => {
       if (b.id !== blockId) return b
@@ -794,7 +787,6 @@ async function changeStatus($: EngineInterface, choose: (current: Status) => Sta
       marks[index] = choose(from)
       change = { key, what: `需要用户做的「${b.needsMe[index] ?? ''}」（块 [${b.id}]「${b.title}」）`, from, to: marks[index]! }
       if (verdicts.has(key) || (isAnswer(marks[index]!) && isQuestion(b, index))) verdict = marks[index]!
-      else if (isAnswer(marks[index]!)) told = true
       // 我手动改过的，「自动」记号清掉
       const auto = b.needsMe.map((_, i) => (i === index ? null : (b.needsMeAuto?.[i] ?? null)))
       const updated = { ...b, needsMeStatus: marks, needsMeAuto: auto }
@@ -805,7 +797,6 @@ async function changeStatus($: EngineInterface, choose: (current: Status) => Sta
   )
   if (change !== undefined) await noteChange($, change)
   if (verdict !== undefined) noteVerdict($, key, verdict)
-  if (told) $.ui.toast('记下了：这是交给你做的事，不单独发，下次发消息时一起告诉 Claude')
 }
 
 // ---------- 验收没通过、回答了是或否：交给 Claude 回应 ----------
@@ -845,7 +836,6 @@ let verdictRound = 0
 function noteVerdict($: EngineInterface, id: string, to: Status) {
   verdicts.add(id)
   const round = ++verdictRound
-  if (VERDICT[to] !== undefined) $.ui.toast(`${VERDICT_DELAY / 1000} 秒后交给 Claude 回应（${STATUS_INFO[to].label}），这期间还能接着换状态`)
   $.clock.after(VERDICT_DELAY, () => {
     if (round === verdictRound) void sendVerdicts($)
   })
@@ -943,7 +933,6 @@ async function cycleLevel($: EngineInterface) {
   // 「全部展开」照办，别的档位交还给自动折叠
   await update($, unfolded, () => (nextLevel === 'all' ? all.map(b => b.id) : []))
   await keepCursorVisible($)
-  $.ui.toast(LEVEL_LABEL[nextLevel])
 }
 
 /** 折起来以后光标要是被藏住了，挪到看得见的那个祖先块上 */
@@ -985,12 +974,8 @@ async function jump($: EngineInterface) {
   const id = await cursorBlockId($)
   const b = (await read($, blocks)).find(one => one.id === id)
   const messageId = b?.kind === 'turn' ? b.messageId : (await read($, blocks)).find(one => one.id === b?.parent)?.messageId
-  if (messageId === undefined) {
-    $.ui.toast('这一块没有对应的消息可跳')
-    return
-  }
-  const moved = await $.ui.scroll({ to: { requestId: messageId }, block: 'start' })
-  if (moved.deny !== undefined) $.ui.toast(`跳不过去：${moved.deny}`)
+  if (messageId === undefined) return
+  await $.ui.scroll({ to: { requestId: messageId }, block: 'start' })
 }
 
 async function runAction($: EngineInterface, action: string) {
@@ -1013,7 +998,10 @@ async function runAction($: EngineInterface, action: string) {
   if (action === 'body') return toggleBodyFold($)
   if (action === 'body-all') return toggleBodyFoldAll($)
   if (action === 'jump') return jump($)
-  if (action === 'export') return $.ui.toast(await exportView($, await read($, view)))
+  if (action === 'export') {
+    await exportView($, await read($, view))
+    return
+  }
   if (action === 'recap') return generateRecap($)
   if (action === 'progress') return refreshProgress($)
   if (action === 'legend') return toggleLegend($)
@@ -1128,10 +1116,7 @@ const PROGRESS_SYSTEM = `Claude Code 还在处理用户的一个请求，用户�
 /** 手动刷新：这一轮还没结束也先给个小结 */
 async function refreshProgress($: EngineInterface) {
   const turn = current
-  if (turn === undefined) {
-    $.ui.toast('现在没有进行中的一轮，大纲已经是最新的')
-    return
-  }
+  if (turn === undefined) return
   await writeLive($)
   const mark = (patch: Partial<Block>, live: Partial<Block['live'] & object>) =>
     setBlocks($, all => all.map(b => (b.id === turn.blockId && b.live !== undefined ? { ...b, ...patch, live: { ...b.live, ...live } } : b)))
@@ -1146,7 +1131,6 @@ async function refreshProgress($: EngineInterface) {
   if (current?.turnId !== turn.turnId) return // 刷新期间这一轮已经结束，交给正式总结
   if (data === undefined) {
     await mark({}, { isRefreshing: false })
-    $.ui.toast(`进度没刷新出来（${reply.isAnswered ? '格式不对' : reply.reason}）`)
     return
   }
   const now = await $.clock.now()
@@ -1192,10 +1176,7 @@ const RECAP_SYSTEM = `你在给一段 Claude Code 会话写回顾，读的人刚
 /** 大纲自己的回顾：只读大纲里的块，不读主对话，不占主对话上下文 */
 async function generateRecap($: EngineInterface) {
   const list = (await read($, blocks)).filter(b => b.kind === 'turn' && !b.isPending)
-  if (list.length === 0) {
-    $.ui.toast('还没有可以回顾的内容')
-    return
-  }
+  if (list.length === 0) return
   const previous = await read($, recap)
   await update($, recap, () => ({ text: previous?.text ?? '', source: 'outline' as const, at: previous?.at ?? 0, isPending: true }))
   const lines = list.slice(-30).map(b =>
@@ -1211,7 +1192,6 @@ async function generateRecap($: EngineInterface) {
   const reply = await $.model.complete({ model: 'haiku', system: RECAP_SYSTEM, prompt: lines.join('\n'), maxTokens: 512, timeoutMs: 60000 })
   if (!reply.isAnswered) {
     await update($, recap, () => previous)
-    $.ui.toast(`回顾没生成出来（${reply.reason}）`)
     return
   }
   await addRecap($, reply.text, 'outline')
@@ -1258,10 +1238,29 @@ async function markAgendaDone($: EngineInterface, sid: string, blockId: string) 
   await collectAgenda($)
 }
 
+/** 记下会话的名字；没给、空的就不动 */
+async function noteTitle($: EngineInterface, title: string | undefined) {
+  if (title === undefined || title.trim() === '') return
+  await update($, sessionTitle, () => title.trim())
+}
+
 // ---------- 注册 ----------
 
 export const register: Register = (on, options) => {
   const keys = parseKeys(typeof options.views === 'string' ? options.views : DEFAULT_KEYS)
+
+  // 会话的名字只在设置里那种 hook 的输入里有：开场、每条消息各带一份，改名了下一条消息就跟上
+  on('classic.SessionStart', async ($, e, next) => {
+    const result = await next(e)
+    await noteTitle($, e.session_title)
+    return result
+  })
+
+  on('classic.UserPromptSubmit', async ($, e, next) => {
+    const result = await next(e)
+    await noteTitle($, e.session_title)
+    return result
+  })
 
   on('session.start', async ($, e, next) => {
     cwd = e.cwd
@@ -1534,6 +1533,9 @@ export const register: Register = (on, options) => {
 
   on('ui.render', { component: 'UserMessage' }, async ($, e, next) => {
     if (e.props.isExpanded) return next(e)
+    if (e.props.origin.kind === 'plugin' && e.props.origin.name === 'outline-sidebar') {
+      return next({ ...e, props: { ...e.props, text: compactSentText(e.props.text) } })
+    }
     const label = (await read($, body)).labels[e.requestId]
     return label === undefined ? next(e) : next({ ...e, props: { ...e.props, text: label } })
   })
@@ -1575,6 +1577,7 @@ export const register: Register = (on, options) => {
     const isBodyAll = await read($, bodyFoldAll)
     const latest = await read($, recap)
     const isLegend = await read($, legend)
+    const title = await read($, sessionTitle)
     const now = await $.clock.now()
     const width = e.props.bodyColumns
     // 终端用图标字体；桌面（以及别的能画 SVG 的界面）用 SVG
@@ -1623,24 +1626,37 @@ export const register: Register = (on, options) => {
 
     const header = (
       <Box flexDirection="column">
+        {/* 会话的名字当大纲的标题，顶格；终端只有一种字号，靠加粗突出 */}
+        {title !== null && (
+          <Text bold size="title">
+            {title}
+          </Text>
+        )}
+        {/* 视图栏留成按钮：侧栏有键盘时数字键才切得了视图。按钮在指针下一定反色，里面的字只用一种样式，反出来才是一整块 */}
         <Box flexWrap="wrap" columnGap={1}>
           {keys.map((one, i) => (
             <Button
               key={`view-${one}`}
               plain
               hotkey={String(i + 1)}
+              dimColor={v !== one}
               {...(v === one ? { autoFocus: true as const } : {})}
-              onPress={() => (v === one && e.surface === 'terminal' ? $.ui.toast(ENTER_TIP) : switchView($, one))}
+              onPress={() => (v === one && e.surface === 'terminal' ? undefined : switchView($, one))}
             >
-              {v === one ? <Text bold color="claude" inverse={isTabs}>{VIEW_INFO[one].label}</Text> : <Text dimColor>{VIEW_INFO[one].label}</Text>}
-              {one === 'me' && waiting > 0 ? <Text color="warning"> {String(waiting)}</Text> : ''}
+              {v === one ? (
+                <Text bold underline={isTabs}>
+                  {viewLabel(one, waiting)}
+                </Text>
+              ) : (
+                viewLabel(one, waiting)
+              )}
             </Button>
           ))}
         </Box>
         <Box flexWrap="wrap" columnGap={1}>
           {ACTIONS.map(a => (
             <Button key={a.key} plain hotkey={a.hotkey} onPress={() => runAction($, a.key)}>
-              {a.key === 'zoom' && zoomId !== null ? '退出聚焦' : a.key === 'body-all' && isBodyAll ? '正文全开' : a.label}
+              {actionLabel(a, zoomId !== null, isBodyAll)}
             </Button>
           ))}
         </Box>
@@ -1699,9 +1715,10 @@ export const register: Register = (on, options) => {
     if (e.surface === 'terminal') {
       // 判断 e.surface 后直接从 $.ui.resolve(e) 解构，目录才认得出这里加载的是 ./tree-view.tsx
       const { Client } = $.ui.resolve(e)
-      const viewLabels = keys.map((one, i) => `${i + 1}: ${VIEW_INFO[one].label}${one === 'me' && waiting > 0 ? ` ${waiting}` : ''}`)
-      const actionLabels = ACTIONS.map(a => `${a.hotkey}: ${a.label}`)
+      const viewLabels = keys.map((one, i) => `${i + 1}: ${viewLabel(one, waiting)}`)
+      const actionLabels = ACTIONS.map(a => `${a.hotkey}: ${actionLabel(a, zoomId !== null, isBodyAll)}`)
       const headerRows =
+        (title === null ? 0 : textRows(title, width)) +
         estimateWrappedRows(viewLabels, width) +
         estimateWrappedRows(actionLabels, width) +
         (latest === null ? 0 : 1 + (latest.text === '' ? 0 : textRows(latest.text, width - 2))) +
@@ -1711,23 +1728,21 @@ export const register: Register = (on, options) => {
         (v === 'tech' ? 3 + (allMetrics === null ? 0 : 3) : 0) +
         1
       const height = Math.max(6, e.props.scroll.bodyRows - headerRows)
+      const wheelAt = await read($, wheel)
+      const levelNow = await read($, level)
+      const treeProps: TreeProps = {
+        rows: toTreeRows(rows, v, openIds, at, now),
+        height,
+        scope: isTabs ? 'tabs' : 'tree',
+        wheel: wheelAt,
+        menu: menuFor(levelNow, zoomId !== null, isBodyAll),
+        itemMenu: itemMenu(),
+        ...(empty === undefined ? {} : { empty }),
+      }
       return (
         <Box flexDirection="column" width={width}>
           {header}
-          <Client
-            key={TREE}
-            module="./tree-view.tsx"
-            props={{
-              rows: toTreeRows(rows, v, openIds, at, now),
-              height,
-              scope: isTabs ? 'tabs' : 'tree',
-              wheel: await read($, wheel),
-              menu: menuFor(await read($, level), zoomId !== null, isBodyAll),
-              itemMenu: itemMenu(),
-              ...(empty === undefined ? {} : { empty }),
-            }}
-            width={width}
-          />
+          <Client module="./tree-view.tsx" key={TREE} props={treeProps} width={width} />
         </Box>
       )
     }

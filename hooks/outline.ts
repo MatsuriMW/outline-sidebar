@@ -637,3 +637,15 @@ export const estimateWrappedRows = (labels: readonly string[], columns: number) 
 
 /** 一段文字在给定宽度下大约占几行（中日韩文字占两格） */
 export const textRows = (text: string, columns: number) => Math.max(1, Math.ceil(cellWidth(text) / Math.max(4, columns)))
+
+/**
+ * 侧栏替我发给 Claude 的消息，在对话里只画要点：开头一句，加上每一条的「哪件事：怎么答 / 从什么改成什么」。
+ * 块名括注、每条后面给 Claude 的说明、「回一句收到」「开子代理」这些整段话都不画；ctrl+o 照样看全文
+ */
+export const compactSentText = (text: string) => {
+  const [head = '', ...rest] = text.split('\n')
+  const items = rest
+    .filter(line => line.startsWith('- '))
+    .map(line => line.replace(/（[^（）]*）(?=：)/, '').replace(/^(- .*?：[^。]*)。.*$/, '$1'))
+  return [head, ...items].join('\n')
+}
