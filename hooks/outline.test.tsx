@@ -22,7 +22,7 @@ const USAGE = { input_tokens: 100, output_tokens: 200, cache_read_input_tokens: 
 const REPLIES = () => [
   { title: '给随机漫步加时间筛选', status: 'WAITING', did: ['加了 7 天 / 1 个月 / 全部三档'], conclusion: '默认全部', questions: [], needsMe: ['确认第 4 档是什么'], asks: [0], parent: null, resolved: [] },
   { title: '修 Hexo 部署', status: 'DONE', did: ['改了 _config.yml'], conclusion: '', questions: [], needsMe: [], parent: null, resolved: [] },
-  { title: '第 4 档定为 3 个月', status: 'DONE', did: ['加了 3 个月档'], conclusion: '', questions: [], needsMe: [], parent: 'b1', resolved: ['b1'] },
+  { title: '第 4 档定为 3 个月', status: 'DONE', did: ['加了 3 个月档'], conclusion: '', questions: [], needsMe: [], parent: 'b1', resolved: [{ key: 'b1#0', by: 'user' }] },
 ]
 
 /** 引擎这一侧：每个 hook 替引擎回答 */
@@ -434,10 +434,10 @@ test('中文输入法下也能用：回车弹菜单改状态，空格展开详�
   await ui.key({ key: ' ', in: 'tree' })
   expect(await has(/默认全部/)).toBe(true)
 
-  // 回车弹菜单，往下选到 Failed，回车（详情之后是各个状态，Failed 排第 18 项）
+  // 回车弹菜单，往下选到 Failed，回车（详情之后是各个状态，Failed 排第 19 项）
   await ui.key({ key: 'return', in: 'tree' })
   expect(await has(/^详情$/)).toBe(true)
-  for (let i = 0; i < 18; i++) await ui.key({ key: 'down', in: 'tree' })
+  for (let i = 0; i < 19; i++) await ui.key({ key: 'down', in: 'tree' })
   await ui.key({ key: 'return', in: 'tree' })
   expect(await has(/^详情$/)).toBe(false)
   expect(await has(/Failed/)).toBe(true)
@@ -824,5 +824,35 @@ test('窗口按行截、滚轮按行翻：底下不空一截，↑ ↓ 数的是
   // 光标一动，窗口拉回光标所在的块
   await ui.key({ key: 'down', in: 'tree' })
   expect(await text(/↑/)).toBeUndefined()
+  await ui.unmount()
+})
+
+test('「需要我做」的事按条自动了结：我说的直接 Done，Claude 说替我办了的改成 ToReview，都带「自动」；- 跳过', async ($, on) => {
+  const replies = [
+    { title: '等我两件事', status: 'WAITING', did: [], conclusion: '', questions: [], needsMe: ['重开终端', '挑一个配色', '看一眼日志'], parent: null, resolved: [] },
+    // 下一轮：我说重开过了；Claude 说配色它替我挑了；日志没提
+    { title: '接着做', status: 'DONE', did: [], conclusion: '', questions: [], needsMe: [], parent: null, resolved: [{ key: 'b1#0', by: 'user' }, { key: 'b1#1', by: 'claude' }] },
+  ]
+  const clock = engine(on, [], {}, replies)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  for (const turnId of ['t1', 't2']) {
+    await $.turn.start({ text: '重开过了', turnId })
+    await $.turn.complete({ answer: '好了', durationMs: 1000, isAborted: false, turnId, reason: 'answer', usage: { ...USAGE, model: 'claude-opus-5-5' } })
+    await clock.settle()
+  }
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  const row = async (text: string) => (await ui.findAll({ type: 'Text', in: 'tree' })).map(f => (f as { text?: string }).text ?? '').join('|')
+  await ui.press({ key: 'view-me' })
+  const shown = await row('')
+  // 按条：一件 Done、一件 ToReview、一件还是 Todo；块还在等我，不跟着 Done
+  expect(shown).toContain('Done|  |[自动] |重开终端')
+  expect(shown).toContain('ToReview|  |[自动] |挑一个配色')
+  expect(shown).toContain('Todo|  |看一眼日志')
+  expect(shown).toContain('Waiting')
+
+  // - 跳过剩下那件：光标挪到它上面
+  for (let i = 0; i < 4; i++) await ui.key({ key: 'down', in: 'tree' })
+  await ui.key({ key: '-', in: 'tree' })
+  expect(await row('')).toContain('Skip|  |看一眼日志')
   await ui.unmount()
 })

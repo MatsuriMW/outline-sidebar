@@ -1,6 +1,6 @@
 /** 照 Obsidian todoseq 的关键词（见 hooks/status.ts） */
 export type Status =
-  | 'TODO' | 'TODOFORAI' | 'DOING' | 'TOREVIEW' | 'REWORK' | 'UNCLEAR' | 'YES' | 'NO' | 'NEEDOK' | 'ERRORED' | 'HITLIMIT' | 'QUEUED' | 'DELEGATED' | 'PAUSED'
+  | 'TODO' | 'TODOFORAI' | 'DOING' | 'TOREVIEW' | 'REWORK' | 'UNCLEAR' | 'YES' | 'NO' | 'SKIP' | 'NEEDOK' | 'ERRORED' | 'HITLIMIT' | 'QUEUED' | 'DELEGATED' | 'PAUSED'
   | 'WAITING' | 'SUSPENDED' | 'DONE' | 'FAILED' | 'CANCELLED'
 
 /** turn：我发的一轮；agent / fork：Claude Code 切出去的子任务；btw：/btw 的旁支问题；recap：回顾 */
@@ -59,6 +59,10 @@ export type Block = {
   needsMeStatus?: (Status | null)[]
   /** 「需要我做」里哪几条是问我的问题（下标）：答 Yes / No 要马上告诉 Claude；其余是交给我做的事 */
   needsMeAsks?: number[]
+  /** 「需要我做」每一条是不是后来的对话自动了结的（下标对 needsMe）：user 是我在消息里说了，claude 是 Claude 说替我办了；我手动改过就清掉 */
+  needsMeAuto?: (Resolver | null)[]
+  /** 块本身是不是被后来的对话自动了结的（没有「需要我做」条目、只是在等我的块） */
+  autoResolved?: Resolver
   /** 状态最近一次变的时候，桌面版刚变时播一次出场动效 */
   statusAt?: number
   /** 父块 id，null 为顶层 */
@@ -81,6 +85,12 @@ export type Block = {
   /** 这一轮还没结束时的实时进度；结束后去掉 */
   live?: Live
 }
+
+/** 谁了结了一件等我的事：user 是我在消息里说做完了、给了答复；claude 是 Claude Code 说它替我办了或者不用我做了 */
+export type Resolver = 'user' | 'claude'
+
+/** 总结时模型给的一条「这一轮了结了哪件等我的事」：key 是块 id，或者「块 id#第几条」 */
+export type Resolution = { key: string; by: Resolver }
 
 /** 一条证据：edit 是改了一个文件，run 是跑了一条命令；isOk 看工具有没有报错，tail 是输出的最后一行 */
 export type Evidence = { kind: 'edit' | 'run'; text: string; isOk: boolean; tail?: string }

@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { Elements, EngineInterface, Register } from 'claude-code'
 
-import type { AgendaGroup, Block, Body, Evidence, Kind, Level, Metrics, Recap, Status, StatusChange, Tech, View } from '../types'
+import type { AgendaGroup, Block, Body, Evidence, Kind, Level, Metrics, Recap, Resolution, Status, StatusChange, Tech, View } from '../types'
 import type { Field, Line, MenuItem } from './outline'
 import { PH, PH_SVG } from './icons'
 import type { PhosphorIcon } from './icons'
@@ -15,6 +15,8 @@ import {
   hasOpenForMe,
   itemStatus,
   lineText,
+  applyResolutions,
+  isForMe,
   isMark,
   nextBadStatus,
   nextStatus,
@@ -339,14 +341,18 @@ const SYSTEM = `你在给一段 Claude Code 会话做大纲。每次给你「现
 - needsMe：需要用户做的事（确认、选择、手动操作），没有就空数组
 - asks：needsMe 里哪几条是在问用户、要用户回答是或否或做选择才能往下走的（比如「要我接着加吗」「仓库保持公开吗」），填它们的下标数组（从 0 开始）；交给用户自己去做的事（比如「重开终端看效果」）不算，没有就空数组
 - parent：如果这一轮是顺着现有大纲里某个块继续深入的同一个功能或话题，填那个块的 id；换了新话题或新功能，填 null
-- resolved：现有大纲里「待用户处理」的块中，被这一轮解决了的块 id 数组，没有就空数组
+- resolved：上面「待用户处理」里被这一轮了结的，数组，每一项是 { "key": 列表里方括号中的编号（比如 b4#0 或 b5）, "by": "user" 或 "claude" }。用户在这一轮的原话里说已经做完、给了答复或做了决定，by 填 user；Claude Code 说它替用户做了、或者判断不需要用户做了，by 填 claude。按条判断，没了结的别填，拿不准就不填；没有就空数组
 用户在一轮进行中的插话只是引导和补充，不单独当成任务；以这一轮从提问到做完的整体为准。`
 
 const describeOutline = (list: readonly Block[]) => {
   const turns = list.filter(b => b.kind === 'turn')
   const lines = turns.slice(-40).map(b => `${'  '.repeat(ancestorsOf(list, b).length)}- [${b.id}] ${b.status} ${b.title}`)
-  const waiting = turns.filter(b => (b.needsMe.length > 0 || b.status === 'WAITING') && isOpenStatus(b.status))
-  const pending = waiting.map(b => `- [${b.id}] ${b.title}：${b.needsMe.join('；') || '等待确认'}`)
+  // 按条列：每一条还没了结的「需要我做」单独一行；没有条目、只是在等我的块（待验收的除外）列块本身
+  const pending = turns.flatMap(b => {
+    const open = b.needsMe.flatMap((text, i) => (isOpenStatus(itemStatus(b, i)) ? [`- [${b.id}#${i}] ${text}（块 [${b.id}] ${b.title}）`] : []))
+    if (b.needsMe.length > 0) return open
+    return isForMe(b.status) && b.status !== 'TOREVIEW' ? [`- [${b.id}] ${b.title}（等用户确认）`] : []
+  })
   return `现有大纲：\n${lines.join('\n') || '（空）'}\n\n待用户处理的块：\n${pending.join('\n') || '（无）'}`
 }
 
@@ -360,6 +366,14 @@ const parseJson = (text: string) => {
     return undefined
   }
 }
+
+/** 模型给的 resolved：{ key, by } 的数组；只给了编号字符串（旧写法）的，当成 Claude 说的，宁可让我再看一眼 */
+const parseResolutions = (value: unknown): Resolution[] =>
+  (Array.isArray(value) ? value : []).flatMap(one => {
+    if (typeof one === 'string' && one !== '') return [{ key: one, by: 'claude' as const }]
+    const item = one as { key?: unknown; by?: unknown }
+    return typeof item?.key === 'string' && item.key !== '' ? [{ key: item.key, by: item.by === 'user' ? ('user' as const) : ('claude' as const) }] : []
+  })
 
 const strings = (value: unknown) =>
   Array.isArray(value) ? value.filter((one): one is string => typeof one === 'string' && one !== '') : []
@@ -429,7 +443,7 @@ async function summarize($: EngineInterface, id: string, turn: Turn, answer: str
     const turnIds = new Set(all.filter(b => b.kind === 'turn').map(b => b.id))
     const status = String(data?.status ?? '')
     const parent = typeof data?.parent === 'string' && turnIds.has(data.parent) && data.parent !== id ? data.parent : null
-    const resolved = new Set(strings(data?.resolved))
+    const resolved = parseResolutions(data?.resolved)
     const self = all.find(b => b.id === id)
     return all.map(b => {
       if (b.id === id) {
@@ -456,11 +470,8 @@ async function summarize($: EngineInterface, id: string, turn: Turn, answer: str
           tech: b.tech === undefined ? undefined : { ...b.tech, outlineTokens: b.tech.outlineTokens + spent },
         }
       }
-      // 被这一轮解决的待办：改成 DONE，待办条目留着，显示成已完成
-      if (resolved.has(b.id) && !b.isStatusManual && b.status !== 'DONE') {
-        return { ...b, status: 'DONE' as const, resolvedIn: self?.turn, statusAt: now }
-      }
-      return b
+      // 被这一轮了结的等我的事：按条改，我说的 Done，Claude 说替我办了的 ToReview
+      return applyResolutions(b, resolved, self?.turn, now)
     })
   })
   if (!reply.isAnswered) $.ui.log(`outline-sidebar：这一轮没总结成（${reply.reason}），先用原话当标题`, { to: 'debug' })
@@ -756,7 +767,7 @@ async function changeStatus($: EngineInterface, pick: (current: Status) => Statu
         }
         if (b.status === 'DONE' && to !== 'DONE' && to !== 'CANCELLED') marks.isReopened = true
         if (b.status === 'TOREVIEW' || verdicts.has(key) || isAnswer(to)) verdict = to
-        return { ...b, ...marks, status: to, isStatusManual: true, statusAt: now }
+        return { ...b, ...marks, status: to, isStatusManual: true, statusAt: now, autoResolved: undefined }
       }
       const marks = b.needsMe.map((_, i) => b.needsMeStatus?.[i] ?? null)
       const from = itemStatus(b, index)
@@ -764,7 +775,9 @@ async function changeStatus($: EngineInterface, pick: (current: Status) => Statu
       change = { key, what: `需要用户做的「${b.needsMe[index] ?? ''}」（块 [${b.id}]「${b.title}」）`, from, to: marks[index]! }
       if (verdicts.has(key) || (isAnswer(marks[index]!) && isQuestion(b, index))) verdict = marks[index]!
       else if (isAnswer(marks[index]!)) told = true
-      return { ...b, needsMeStatus: marks }
+      // 我手动改过的，「自动」记号清掉
+      const auto = b.needsMe.map((_, i) => (i === index ? null : (b.needsMeAuto?.[i] ?? null)))
+      return { ...b, needsMeStatus: marks, needsMeAuto: auto }
     }),
   )
   if (change !== undefined) await noteChange($, change)
@@ -858,7 +871,7 @@ async function takeChanges($: EngineInterface) {
   await update($, changes, () => [])
   const lines = list.map(c => `- ${c.what}：${c.from} → ${c.to}`)
   return [
-    '用户在会话大纲侧栏里手动改了下面这些状态。这是用户在告诉你进展：「需要用户做」的事改成 DONE，表示用户已经做完了；块的状态改动表示用户对那件事的判断：DONE 是认可做完；YES、NO 是用户对你的问题答了「是」或「否」；REWORK 是方向对、细节要改；UNCLEAR 是用户没看懂，先解释别改；FAILED 是用户认为没做成，要返工，先弄清哪里不对；SUSPENDED 是先搁置、暂时别碰；CANCELLED 是不做了。据此接着做，不用复述这段说明。',
+    '用户在会话大纲侧栏里手动改了下面这些状态。这是用户在告诉你进展：「需要用户做」的事改成 DONE，表示用户已经做完了；块的状态改动表示用户对那件事的判断：DONE 是认可做完；YES、NO 是用户对你的问题答了「是」或「否」；SKIP 是用户跳过了这件事，不用做也不用再提；REWORK 是方向对、细节要改；UNCLEAR 是用户没看懂，先解释别改；FAILED 是用户认为没做成，要返工，先弄清哪里不对；SUSPENDED 是先搁置、暂时别碰；CANCELLED 是不做了。据此接着做，不用复述这段说明。',
     ...lines,
   ].join('\n')
 }
@@ -1017,6 +1030,8 @@ async function handleKey($: EngineInterface, k: KeyMessage, keys: readonly View[
     if (v !== undefined) await switchView($, v)
     return
   }
+  // -：跳过这件事（中文输入法下是全角的）。按钮只认字母，桌面版走回车菜单
+  if (k.key === '-' || k.key === '－') return setStatus($, 'SKIP')
   // ⇧ 加首字母直接标成对应的负面状态（终端可能报成大写字母，也可能是小写带 shift）
   const verdict = /^[a-zA-Z]$/.test(k.key) && (k.shift || k.key !== k.key.toLowerCase()) ? VERDICT_KEYS[k.key.toLowerCase()] : undefined
   if (verdict !== undefined) return setStatus($, verdict)

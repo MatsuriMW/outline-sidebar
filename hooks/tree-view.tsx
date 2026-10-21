@@ -12,7 +12,7 @@ const padTo = (guide: string, width: number) => guide + ' '.repeat(Math.max(0, w
 
 /** 标题前面那一截（树枝、箭头、状态、角标）占几格 */
 const headWidth = (row: TreeRow) =>
-  cellWidth(row.prefix) + cellWidth(row.arrow) + 1 + cellWidth(row.status) + STATUS_GAP.length + (row.badge === undefined ? 0 : cellWidth(row.badge.text) + 3)
+  cellWidth(row.prefix) + cellWidth(row.arrow) + 1 + cellWidth(row.status) + STATUS_GAP.length + (row.badge === undefined ? 0 : cellWidth(row.badge.text) + 3) + (row.tag === undefined ? 0 : cellWidth(row.tag) + 3)
 
 /** 菜单画在光标所在行下面，带一圈边框 */
 const menuHeight = (count: number) => count + 2
@@ -78,6 +78,7 @@ const TreeView: ClientModule<TreeProps, State> = (props, surface) => {
               <Text color={row.statusColor} bold={row.isOpen} dimColor={row.isContext}>{row.isSpinning ? spun(row.status, frame) : row.status}</Text>
               <Text>{STATUS_GAP}</Text>
               {row.badge !== undefined && <Text color={row.badge.color}>[{row.badge.text}] </Text>}
+              {row.tag !== undefined && <Text dimColor>[{row.tag}] </Text>}
             </Box>
           ) : (
             <Box flexShrink={0}>

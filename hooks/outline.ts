@@ -1,4 +1,4 @@
-import type { Block, Evidence, Kind, Metrics, Status, Tech, View } from '../types'
+import type { Block, Evidence, Kind, Metrics, Resolution, Status, Tech, View } from '../types'
 import { PH } from './icons'
 import type { PhosphorIcon } from './icons'
 import { STATUS_INFO, isForMe, isOpenStatus, statusText } from './status'
@@ -81,6 +81,9 @@ export const FIELD: Record<Field, { icon: PhosphorIcon | Mark; label: string }> 
 }
 
 /** 终端里画图标用的字：Phosphor 字体里的字，「需要我做」是 - */
+/** 后来的对话自动了结的条目和块，标题前面带上它；我一改状态就没了 */
+export const AUTO_TAG = '自动'
+
 /** 没总结出标题、也没有原话可用的块 */
 export const UNTITLED = '（没有标题）'
 
@@ -128,6 +131,40 @@ export const ancestorsOf = (list: readonly Block[], b: Block) => {
     at = at.parent === null ? undefined : byId.get(at.parent)
   }
   return chain
+}
+
+/**
+ * 后来的对话了结了这一块里等我的事，按条改：我自己说的（user）直接 Done；Claude 说替我办了的（claude）改成 ToReview 等我看。
+ * 都打上「自动」的记号；我手动改过的条目和块不动。条目全了结、而且都是我说的，块也跟着 Done
+ */
+export const applyResolutions = (b: Block, found: readonly Resolution[], turn: number | undefined, now: number): Block => {
+  const mine = found.filter(r => parseKey(r.key).blockId === b.id)
+  if (mine.length === 0) return b
+  const settle = (by: Resolution['by']): Status => (by === 'user' ? 'DONE' : 'TOREVIEW')
+  if (b.needsMe.length === 0) {
+    const by = mine[0]!.by
+    return b.isStatusManual || !isForMe(b.status) || b.status === 'TOREVIEW' ? b : { ...b, status: settle(by), autoResolved: by, resolvedIn: turn, statusAt: now }
+  }
+  const marks = b.needsMe.map((_, i) => b.needsMeStatus?.[i] ?? null)
+  const auto = b.needsMe.map((_, i) => b.needsMeAuto?.[i] ?? null)
+  let isChanged = false
+  for (const r of mine) {
+    const { index } = parseKey(r.key)
+    // 只给了块 id：块里每一条还没了结的都算
+    const which = index === undefined ? b.needsMe.map((_, i) => i) : [index]
+    for (const i of which) {
+      if (i >= b.needsMe.length || !isOpenStatus(itemStatus(b, i))) continue
+      // 我手动改过的不动；之前自动改的可以再改
+      if (marks[i] !== null && auto[i] === null) continue
+      marks[i] = settle(r.by)
+      auto[i] = r.by
+      isChanged = true
+    }
+  }
+  if (!isChanged) return b
+  const next: Block = { ...b, needsMeStatus: marks, needsMeAuto: auto }
+  const isAllSettled = b.needsMe.every((_, i) => !isOpenStatus(itemStatus(next, i)))
+  return isAllSettled && !b.isStatusManual && isForMe(b.status) && b.status !== 'TOREVIEW' ? { ...next, status: 'DONE', resolvedIn: turn, statusAt: now } : next
 }
 
 /** 「需要我做」第 i 条的状态：单独改过就用改过的，没改过就跟着块走 */
@@ -181,8 +218,8 @@ export const parseKey = (key: string) => {
   return at < 0 ? { blockId: key } : { blockId: key.slice(0, at), index: Number(key.slice(at + 1)) }
 }
 
-/** 已了结的状态：做完的、不做了的、我已经答过是或否的。层级「去掉 Done」藏起来，整棵都是这些的子树自动折叠 */
-const SETTLED: readonly Status[] = ['DONE', 'CANCELLED', 'YES', 'NO']
+/** 已了结的状态：做完的、不做了的、我已经答过是或否的、我跳过的。层级「去掉 Done」藏起来，整棵都是这些的子树自动折叠 */
+const SETTLED: readonly Status[] = ['DONE', 'CANCELLED', 'YES', 'NO', 'SKIP']
 
 /** 这一块连同它的「需要我做」条目、所有子孙都了结了 */
 const isSettledTree = (list: readonly Block[], b: Block): boolean =>
@@ -482,6 +519,8 @@ export type TreeRow = {
   isCanceled: boolean
   /** 「需要我做」的一条，回车菜单只有改状态 */
   isItem?: boolean
+  /** 标题前面的灰色小记号，比如后来的对话自动了结的「自动」 */
+  tag?: string
   lines: TreeLine[]
 }
 
@@ -518,7 +557,8 @@ export const toTreeRows = (rows: readonly Row[], v: View, open: readonly string[
       isCanceled: st === 'CANCELLED',
     }
     if (row.item !== undefined) {
-      return { ...common, isItem: true, arrow: ITEM_MARK, status: statusText(st), title: row.item.text, isContext: false, lines: [] }
+      const isAuto = b.needsMeAuto?.[row.item.index] != null
+      return { ...common, isItem: true, arrow: ITEM_MARK, status: statusText(st), ...(isAuto ? { tag: AUTO_TAG } : {}), title: row.item.text, isContext: false, lines: [] }
     }
     const badge = KIND_BADGE[b.kind]
     const lines = row.isContext ? [] : blockLines(b, v, open.includes(b.id), now)
@@ -527,6 +567,7 @@ export const toTreeRows = (rows: readonly Row[], v: View, open: readonly string[
       arrow: row.hasChildren ? (row.isFolded ? '▸' : '▾') : '•',
       status: b.isPending ? `${glyph('note')} …` : statusText(st),
       ...(badge === undefined ? {} : { badge }),
+      ...(b.autoResolved === undefined ? {} : { tag: AUTO_TAG }),
       title: b.title === '' ? UNTITLED : b.title,
       isContext: row.isContext,
       lines: lines.map(line => ({

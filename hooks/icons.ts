@@ -4,7 +4,7 @@
 
 export type PhosphorIcon = 'did' | 'files' | 'conclusion' | 'question' | 'resolved' | 'ask' | 'stats' | 'tokens' | 'cache' | 'time' | 'model' | 'skills' | 'mcp' | 'slash' | 'agents' | 'outline' | 'live' | 'last' | 'note' | 'recap' | 'total' | 'empty' | 'folder' | 'celebrate' | 'pending' | 'past' | 'dot' | 'spinner'
 
-export type LucideIcon = 'todo' | 'bot' | 'doing' | 'done' | 'paused' | 'waiting' | 'suspended' | 'cancelled' | 'failed' | 'review' | 'needok' | 'errored' | 'hitlimit' | 'delegated' | 'queued' | 'rework' | 'unclear' | 'yes' | 'no'
+export type LucideIcon = 'todo' | 'bot' | 'doing' | 'done' | 'paused' | 'waiting' | 'suspended' | 'cancelled' | 'failed' | 'review' | 'needok' | 'errored' | 'hitlimit' | 'delegated' | 'queued' | 'rework' | 'unclear' | 'yes' | 'no' | 'skip'
 
 /** Phosphor 图标在字体里的字（终端用） */
 export const PH: Record<PhosphorIcon, string> = {
@@ -59,6 +59,7 @@ export const LU: Record<LucideIcon, string> = {
   unclear: String.fromCodePoint(0x100110), // message-circle-question
   yes: String.fromCodePoint(0x100111), // thumbs-up
   no: String.fromCodePoint(0x100112), // thumbs-down
+  skip: String.fromCodePoint(0x100113), // skip-forward
 }
 
 /** Doing 的 rotate-cw 转 8 个角度，终端里按节拍轮流显示 */

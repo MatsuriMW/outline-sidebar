@@ -32,7 +32,7 @@ LUCIDE = {
     'waiting': 'hourglass', 'suspended': 'snowflake', 'cancelled': 'ban', 'failed': 'x', 'review': 'eye',
     'needok': 'hand', 'errored': 'badge-alert', 'hitlimit': 'gauge', 'delegated': 'send', 'queued': 'alarm-clock',
     'rework': 'pencil-line', 'unclear': 'message-circle-question',
-    'yes': 'thumbs-up', 'no': 'thumbs-down',
+    'yes': 'thumbs-up', 'no': 'thumbs-down', 'skip': 'skip-forward',
 }
 
 
