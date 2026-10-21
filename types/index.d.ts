@@ -112,7 +112,7 @@ export type Live = {
 
 export type View = 'all' | 'me' | 'asks' | 'done' | 'conclusions' | 'tech'
 
-export type Level = 'overview' | 'contents' | 'all'
+export type Level = 'overview' | 'contents' | 'all' | 'undone'
 
 /** 正文折叠：我那条消息改画成一行摘要，这一轮其余的行藏起来 */
 export type Body = { labels: Record<string, string>; hide: string[] }

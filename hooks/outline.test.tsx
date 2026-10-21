@@ -639,3 +639,46 @@ test('「需要我做」的事用 Y / N / D 回复：Yes、No 停手 4 秒后作
   expect(prompts.length).toBe(sent + 2)
   await ui.unmount()
 })
+
+test('引导线不断：标题和字段折成几行时，每一行左边都接着画竖线', async ($, on) => {
+  const long = '这是一段很长的结论，'.repeat(8)
+  const reply = (title: string, parent: string | null, conclusion: string) => ({ title, status: 'DONE', did: [], conclusion, questions: [], needsMe: [], parent, resolved: [] })
+  const clock = engine(on, [], {}, [reply('一个标题也很长很长很长很长很长很长很长很长很长很长很长很长的母块', null, long), reply('子块', 'b1', '短')])
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  for (const turnId of ['t1', 't2']) {
+    await $.turn.start({ text: '做点事', turnId })
+    await $.turn.complete({ answer: '好了', durationMs: 1000, isAborted: false, turnId, reason: 'answer', usage: { ...USAGE, model: 'claude-opus-5-5' } })
+    await clock.settle()
+  }
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await ui.press({ key: 'view-conclusions' })
+  // 母块有子块，它的标题续行、结论的每一行前面都是「│」加空格；结论折成好几行，竖线就有好几段
+  const guides = await ui.findAll({ type: 'Text', text: /^│ +$/, in: 'tree' })
+  expect(guides.length).toBeGreaterThanOrEqual(4)
+  await ui.unmount()
+})
+
+test('层级「去掉 Done」：Done 的块藏起来，下面还有没做完的子块就变暗留着当上下文', async ($, on) => {
+  const reply = (title: string, status: string, parent: string | null) => ({ title, status, did: [], conclusion: '', questions: [], needsMe: [], parent, resolved: [] })
+  const clock = engine(on, [], {}, [reply('做完的母块', 'DONE', null), reply('还在做的子块', 'DOING', 'b1'), reply('做完的另一块', 'DONE', null)])
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  for (const turnId of ['t1', 't2', 't3']) {
+    await $.turn.start({ text: '做点事', turnId })
+    await $.turn.complete({ answer: '好了', durationMs: 1000, isAborted: false, turnId, reason: 'answer', usage: { ...USAGE, model: 'claude-opus-5-5' } })
+    await clock.settle()
+  }
+  const ui = await $.ui.mount({ ...PANE, surface: 'vscode' })
+  const has = async (text: RegExp) => (await ui.find({ type: 'Text', text })) !== undefined
+  await ui.press({ key: 'view-all' })
+  expect(await has(/做完的另一块/)).toBe(true)
+  // 默认是「全部标题」，O 两下：全部展开 → 去掉 Done
+  await ui.press({ key: 'level' })
+  await ui.press({ key: 'level' })
+  expect(await has(/做完的另一块/)).toBe(false)
+  expect(await has(/还在做的子块/)).toBe(true)
+  expect(await has(/做完的母块/)).toBe(true)
+  // 再按一下回到「只看顶层」，Done 的块又出来了
+  await ui.press({ key: 'level' })
+  expect(await has(/做完的另一块/)).toBe(true)
+  await ui.unmount()
+})

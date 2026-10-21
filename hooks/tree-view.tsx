@@ -11,6 +11,9 @@ const lineRoom = (line: TreeLine, room: number) => room - (line.level === 1 ? 3 
 
 const lineHeight = (line: TreeLine, room: number) => linesFor(line.text, lineRoom(line, room))
 
+/** 折出来的续行前面：竖线照画，后面补空格到 width 格，让引导线一行一行连下去 */
+const padTo = (guide: string, width: number) => guide + ' '.repeat(Math.max(0, width - cellWidth(guide)))
+
 /** 标题前面那一截（树枝、箭头、状态、角标）占几格 */
 const headWidth = (row: TreeRow) =>
   cellWidth(row.prefix) + cellWidth(row.arrow) + 1 + cellWidth(row.status) + STATUS_GAP.length + (row.badge === undefined ? 0 : cellWidth(row.badge.text) + 3)
@@ -148,36 +151,39 @@ const TreeView: ClientModule<TreeProps, State> = (props, surface) => {
       {props.empty !== undefined && <Text dimColor>{props.empty}</Text>}
       {shown.map(row => (
         <Box flexDirection="column" marginTop={row.isGap ? 1 : 0}>
-          <Box flexDirection="row">
-            {/* 标题前面这一截不许被挤，挤了状态图标和字会被拆成两行 */}
-            <Box flexShrink={0} flexDirection="row">
-              {row.prefix !== '' && <Text dimColor>{row.prefix}</Text>}
-              <Text inverse={row.isAt && scope === 'tree'}>{row.arrow}</Text>
-              <Text> </Text>
-              <Text color={row.statusColor} bold={row.isOpen} dimColor={row.isContext}>{row.isSpinning ? spun(row.status, frame) : row.status}</Text>
-              <Text>{STATUS_GAP}</Text>
-              {row.badge !== undefined && <Text color={row.badge.color}>[{row.badge.text}] </Text>}
-            </Box>
-            <Box flexDirection="column">
-              {wrapCells(row.title, columns - headWidth(row)).map(part => (
-                <Text dimColor={row.isContext || row.isClosed} strikethrough={row.isCanceled} bold={(row.isAt && scope === 'tree') || (row.isOpen && !row.isContext)} color={row.badge?.color}>
-                  {part}
-                </Text>
-              ))}
-            </Box>
-          </Box>
-          {row.lines.map(line => (
+          {wrapCells(row.title, columns - headWidth(row)).map((part, i) => (
             <Box flexDirection="row">
-              <Box flexShrink={0}>
-                <Text dimColor>{row.cont}{line.level === 1 ? '   ' : ''}{line.isBullet === true ? '• ' : ''}</Text>
-              </Box>
-              <Box flexDirection="column">
-                {wrapCells(line.text, lineRoom(line, columns - cellWidth(row.cont))).map(part => (
-                  <Text color={line.color} dimColor={line.color === undefined}>{part}</Text>
-                ))}
-              </Box>
+              {/* 标题前面这一截不许被挤，挤了状态图标和字会被拆成两行 */}
+              {i === 0 ? (
+                <Box flexShrink={0} flexDirection="row">
+                  {row.prefix !== '' && <Text dimColor>{row.prefix}</Text>}
+                  <Text inverse={row.isAt && scope === 'tree'}>{row.arrow}</Text>
+                  <Text> </Text>
+                  <Text color={row.statusColor} bold={row.isOpen} dimColor={row.isContext}>{row.isSpinning ? spun(row.status, frame) : row.status}</Text>
+                  <Text>{STATUS_GAP}</Text>
+                  {row.badge !== undefined && <Text color={row.badge.color}>[{row.badge.text}] </Text>}
+                </Box>
+              ) : (
+                <Box flexShrink={0}>
+                  <Text dimColor>{padTo(row.cont, headWidth(row))}</Text>
+                </Box>
+              )}
+              <Text dimColor={row.isContext || row.isClosed} strikethrough={row.isCanceled} bold={(row.isAt && scope === 'tree') || (row.isOpen && !row.isContext)} color={row.badge?.color}>
+                {part}
+              </Text>
             </Box>
           ))}
+          {row.lines.flatMap(line => {
+            const lead = `${row.cont}${line.level === 1 ? '   ' : ''}${line.isBullet === true ? '• ' : ''}`
+            return wrapCells(line.text, lineRoom(line, columns - cellWidth(row.cont))).map((part, i) => (
+              <Box flexDirection="row">
+                <Box flexShrink={0}>
+                  <Text dimColor>{i === 0 ? lead : padTo(row.cont, cellWidth(lead))}</Text>
+                </Box>
+                <Text color={line.color} dimColor={line.color === undefined}>{part}</Text>
+              </Box>
+            ))
+          })}
           {isMenuOpen && row.isAt && scope === 'tree' && (
             <Box flexDirection="column" borderStyle="round" borderColor="claude" paddingX={1}>
               {menuItems.map((item, i) => (

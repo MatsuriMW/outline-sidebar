@@ -73,8 +73,11 @@ const metricsAll = atom({ plugin: 'outline-sidebar', key: 'metricsAll' } as cons
 /** 面板上（键盘不在树里）按 ⏎：Claude Code 只让鼠标点击把键盘交给树 */
 const ENTER_TIP = '用鼠标点一下下面的大纲树，键盘就进去了；之后选视图、⏎ 进入、⌫ 返回都在树里完成，别按 Esc'
 
-const LEVELS: Level[] = ['overview', 'contents', 'all']
-const LEVEL_LABEL: Record<Level, string> = { overview: '只看顶层', contents: '全部标题', all: '全部展开' }
+const LEVELS: Level[] = ['overview', 'contents', 'all', 'undone']
+const LEVEL_LABEL: Record<Level, string> = { overview: '只看顶层', contents: '全部标题', all: '全部展开', undone: '去掉 Done' }
+
+/** 层级「去掉 Done」：Done 的块不显示 */
+const isHidingDone = async ($: EngineInterface) => (await read($, level)) === 'undone'
 
 /** 工具栏：文字按钮（中文输入法下用不了字母快捷键时，点按钮或在树里按回车用菜单） */
 const ACTIONS: { key: string; hotkey: string; label: string }[] = [
@@ -475,7 +478,7 @@ const toggle = (list: readonly string[] | undefined, id: string) =>
   (list ?? []).includes(id) ? (list ?? []).filter(one => one !== id) : [...(list ?? []), id]
 
 async function currentRows($: EngineInterface) {
-  return visibleRows(await read($, blocks), await read($, view), await read($, folded), await read($, zoom), await read($, open))
+  return visibleRows(await read($, blocks), await read($, view), await read($, folded), await read($, zoom), await read($, open), await isHidingDone($))
 }
 
 /** 光标可能停在「需要我做」的某一条上；块一级的操作（折叠、缩进、聚焦…）作用在它所在的块 */
@@ -834,7 +837,7 @@ const menuFor = (lvl: Level, isZoomed: boolean, isBodyAll: boolean): MenuItem[] 
 /** 光标在「需要我做」的某一条上时，菜单只有改状态 */
 const itemMenu = (): MenuItem[] => statusMenu()
 
-/** 层级按钮（O）：只看顶层 → 全部标题 → 全部展开（连详情） */
+/** 层级按钮（O）：只看顶层 → 全部标题 → 全部展开（连详情）→ 去掉 Done（不折、不展开详情，Done 的块藏起来） */
 async function cycleLevel($: EngineInterface) {
   const all = await read($, blocks)
   const next = LEVELS[(LEVELS.indexOf(await read($, level)) + 1) % LEVELS.length]!
@@ -866,7 +869,7 @@ async function toggleZoom($: EngineInterface) {
 
 async function exportView($: EngineInterface, v: View, path?: string) {
   const list = await read($, blocks)
-  const rows = visibleRows(list, v, await read($, folded), await read($, zoom))
+  const rows = visibleRows(list, v, await read($, folded), await read($, zoom), [], await isHidingDone($))
   const now = new Date(await $.clock.now())
   const md = toMarkdown(list, rows, v, await read($, open), now.toISOString().slice(0, 16).replace('T', ' '))
   const count = rows.filter(r => !r.isContext).length
@@ -1466,7 +1469,7 @@ export const register: Register = (on, options) => {
     // 视图栏的高亮只在终端的树里有意义（别的界面是按钮，焦点由界面自己管）
     const isTabs = e.surface === 'terminal' && (await read($, scope)) === 'tabs'
 
-    const rows = visibleRows(list, v, foldedIds, zoomId, openIds)
+    const rows = visibleRows(list, v, foldedIds, zoomId, openIds, await isHidingDone($))
     const zoomed = zoomId === null ? undefined : list.find(b => b.id === zoomId)
     const waiting = waitingCount(list)
     const total = v === 'tech' ? sumTech(list) : undefined

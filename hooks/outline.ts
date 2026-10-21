@@ -181,13 +181,17 @@ export const parseKey = (key: string) => {
   return at < 0 ? { blockId: key } : { blockId: key.slice(0, at), index: Number(key.slice(at + 1)) }
 }
 
-/** 按视图把树摊成可见的行。除「全部」外都是 sparse tree：命中的块和它们的祖先，其余不显示。 */
-export const visibleRows = (list: readonly Block[], v: View, folded: readonly string[], zoom: string | null, open: readonly string[] = []): Row[] => {
-  const isFiltered = v !== 'all'
+/**
+ * 按视图把树摊成可见的行。除「全部」外都是 sparse tree：命中的块和它们的祖先，其余不显示。
+ * hideDone（层级「去掉 Done」）：Done 的块也不算命中，下面还有没做完的子块时留着当上下文
+ */
+export const visibleRows = (list: readonly Block[], v: View, folded: readonly string[], zoom: string | null, open: readonly string[] = [], hideDone = false): Row[] => {
+  const isFiltered = v !== 'all' || hideDone
+  const hit = (b: Block) => matches(b, v) && !(hideDone && b.status === 'DONE')
   const keep = new Set<string>()
   if (isFiltered) {
     for (const b of list) {
-      if (!matches(b, v)) continue
+      if (!hit(b)) continue
       keep.add(b.id)
       for (const a of ancestorsOf(list, b)) keep.add(a.id)
     }
@@ -205,7 +209,7 @@ export const visibleRows = (list: readonly Block[], v: View, folded: readonly st
       return
     }
     // 「需要我做」的条目排在子块前面，各占一行
-    const showItems = (v === 'me' || open.includes(b.id)) && !(isFiltered && !matches(b, v))
+    const showItems = (v === 'me' || open.includes(b.id)) && !(isFiltered && !hit(b))
     const items: Node[] = showItems ? b.needsMe.map((text, index) => ({ block: b, item: { index, text, status: itemStatus(b, index) } })) : []
     const kids: Node[] = [...items, ...shown(childrenOf(list, b.id)).map(block => ({ block }))]
     const isFolded = folded.includes(b.id) && kids.length > 0
@@ -213,7 +217,7 @@ export const visibleRows = (list: readonly Block[], v: View, folded: readonly st
       block: b,
       key: b.id,
       depth,
-      isContext: isFiltered && !matches(b, v),
+      isContext: isFiltered && !hit(b),
       hasChildren: kids.length > 0,
       isFolded,
       prefix: parentCont + branch,
