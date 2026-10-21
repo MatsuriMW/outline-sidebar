@@ -702,3 +702,22 @@ test('层级「去掉 Done」也藏起「需要我做」里答过 Yes / No、做
   expect(await has(/^问题乙$/)).toBe(true)
   await ui.unmount()
 })
+
+test('待验收的块上按 Y 就是验收通过：同样要先看证据，算放行，不额外发消息', async ($, on) => {
+  const clock = await reviewTurn($, on)
+  const ui = await $.ui.mount({ ...PANE, surface: 'vscode' })
+  const has = async (text: RegExp) => (await ui.find({ type: 'Text', text })) !== undefined
+  await ui.press({ key: 'view-all' })
+  const sent = prompts.length
+  // 第一下只展开证据，第二下才通过，变成 Done 而不是 Yes
+  await ui.press({ key: 'yes' })
+  expect(await has(/^ToReview$/)).toBe(true)
+  await ui.press({ key: 'yes' })
+  expect(await has(/^Done$/)).toBe(true)
+  expect(await has(/^Yes$/)).toBe(false)
+  await clock.advance(5000)
+  expect(prompts.length).toBe(sent)
+  await ui.press({ key: 'view-tech' })
+  expect(await has(/拦下 0\/1 · 0%/)).toBe(true)
+  await ui.unmount()
+})

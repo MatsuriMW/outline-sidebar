@@ -907,7 +907,8 @@ async function runAction($: EngineInterface, action: string) {
   if (action === 'status') return cycleStatus($)
   if (action === 'status-bad') return changeStatus($, nextBadStatus)
   if (action === 'done') return setStatus($, 'DONE')
-  if (action === 'yes') return setStatus($, 'YES')
+  // 待验收的块上按 Y 就是验收通过：走 Done 的路子（先看证据、算放行、不额外发消息）
+  if (action === 'yes') return changeStatus($, st => (st === 'TOREVIEW' ? 'DONE' : 'YES'))
   if (action === 'no') return setStatus($, 'NO')
   if (action === 'level') return cycleLevel($)
   if (action === 'zoom') return toggleZoom($)
