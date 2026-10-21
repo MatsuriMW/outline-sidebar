@@ -588,3 +588,25 @@ test('Errored、Hit Limit! 由 mod 标：一轮因 API 出错结束就是 Errore
   expect(await has(/^Done$/)).toBe(false)
   await ui.unmount()
 })
+
+test('存档超过上限时删最久没保存的会话，不按写入顺序删：一直在用的老会话 resume 回来大纲还在', async ($, on) => {
+  // 101 个旧会话，每个留一件没办完的事：第一个写入的 old0 最近才保存过，old1、old2 最久没动（模拟时钟从 0 开始，旧的都记在 0 之前）
+  const block = (title: string) => ({ id: 'b1', kind: 'turn', turn: 1, ask: '', title, status: 'NEEDOK', did: [], conclusion: '', questions: [], needsMe: ['确认'], parent: null, isManual: false, isStatusManual: false, isPending: false, files: [], commands: 0 })
+  const stored: Record<string, unknown> = {}
+  for (let i = 0; i <= 100; i++) stored[`session:old${i}`] = { blocks: [block(`会话old${i}`)], cwd: '/', savedAt: i === 0 ? 9_000_000 : i - 1000 }
+  const clock = engine(on, [], stored, REPLIES())
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.turn.start({ text: '随便做点什么', turnId: 't1' })
+  await $.turn.complete({ answer: '好了', durationMs: 1000, isAborted: false, turnId: 't1', reason: 'answer', usage: { ...USAGE, model: 'claude-opus-5-5' } })
+  await clock.settle()
+
+  // 当前会话存进去以后一共 102 个，删掉最久没保存的两个；Agenda 读的就是这些存档
+  await $.command.run({ command: 'agenda', args: '' } as never)
+  const ui = await $.ui.mount({ ...PANE, requestId: 'agenda', props: { ...PANE.props, title: 'Agenda' }, surface: 'terminal' })
+  const has = async (text: RegExp) => (await ui.find({ type: 'Text', text })) !== undefined
+  expect(await has(/^会话old0$/)).toBe(true)
+  expect(await has(/^会话old3$/)).toBe(true)
+  expect(await has(/^会话old1$/)).toBe(false)
+  expect(await has(/^会话old2$/)).toBe(false)
+  await ui.unmount()
+})

@@ -49,7 +49,7 @@ const PANE = 'outline'
 const TITLE = '大纲'
 const AGENDA = 'agenda'
 const STORE_PREFIX = 'session:'
-const STORE_KEEP = 30
+const STORE_KEEP = 100
 const TREE = 'tree'
 
 const blocks = atom({ plugin: 'outline-sidebar', key: 'blocks' } as const, [])
@@ -236,7 +236,11 @@ async function persist($: EngineInterface) {
   const sid = await $.session.id()
   await $.store.set(`${STORE_PREFIX}${sid}`, { blocks: await read($, blocks), cwd, savedAt: await $.clock.now() })
   const keys = (await $.store.keys()).filter(k => k.startsWith(STORE_PREFIX))
-  for (const old of keys.slice(0, Math.max(0, keys.length - STORE_KEEP))) await $.store.delete(old)
+  if (keys.length <= STORE_KEEP) return
+  // 超了才删，按最后保存的时间删最久没动过的：键的顺序是第一次写入的顺序，一直在用的老会话也排在前面
+  const dated = await Promise.all(keys.map(async key => ({ key, at: ((await $.store.get(key)) as Saved | undefined)?.savedAt ?? 0 })))
+  dated.sort((a, b) => a.at - b.at)
+  for (const old of dated.slice(0, dated.length - STORE_KEEP)) await $.store.delete(old.key)
 }
 
 async function setBlocks($: EngineInterface, change: (list: Block[]) => Block[]) {
@@ -1101,7 +1105,8 @@ async function collectAgenda($: EngineInterface) {
       .filter(b => b.live === undefined && matches(b, 'me') && isOpenStatus(b.status))
       .map(b => ({ sid: id, blockId: b.id, title: b.title, needsMe: b.needsMe, status: b.status }))
     if (items.length === 0) return
-    const date = new Date(savedAt).toISOString().slice(5, 16).replace('T', ' ')
+    // 当前会话的 savedAt 是排序用的最大数，不能拿去格式化日期
+    const date = isCurrent ? '' : new Date(savedAt).toISOString().slice(5, 16).replace('T', ' ')
     const first = list.find(b => b.kind === 'turn')?.title ?? ''
     groups.push({ sid: id, label: `${isCurrent ? '🟢' : `🕘 ${date}`}  📁 ${where || '?'}  ${clip(first, 20)}`, isCurrent, items, savedAt })
   }
