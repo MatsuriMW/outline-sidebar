@@ -57,6 +57,8 @@ export type Block = {
   needsMe: string[]
   /** 「需要我做」每一条单独改过的状态（下标对 needsMe）；没改过的跟着块的状态走 */
   needsMeStatus?: (Status | null)[]
+  /** 「需要我做」里哪几条是问我的问题（下标）：答 Yes / No 要马上告诉 Claude；其余是交给我做的事 */
+  needsMeAsks?: number[]
   /** 状态最近一次变的时候，桌面版刚变时播一次出场动效 */
   statusAt?: number
   /** 父块 id，null 为顶层 */

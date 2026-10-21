@@ -333,6 +333,7 @@ const SYSTEM = `你在给一段 Claude Code 会话做大纲。每次给你「现
 - conclusion：这一轮定下来的结论，一句话，没有就空字符串
 - questions：还没解决的问题，没有就空数组
 - needsMe：需要用户做的事（确认、选择、手动操作），没有就空数组
+- asks：needsMe 里哪几条是在问用户、要用户回答是或否或做选择才能往下走的（比如「要我接着加吗」「仓库保持公开吗」），填它们的下标数组（从 0 开始）；交给用户自己去做的事（比如「重开终端看效果」）不算，没有就空数组
 - parent：如果这一轮是顺着现有大纲里某个块继续深入的同一个功能或话题，填那个块的 id；换了新话题或新功能，填 null
 - resolved：现有大纲里「待用户处理」的块中，被这一轮解决了的块 id 数组，没有就空数组
 用户在一轮进行中的插话只是引导和补充，不单独当成任务；以这一轮从提问到做完的整体为准。`
@@ -445,6 +446,8 @@ async function summarize($: EngineInterface, id: string, turn: Turn, answer: str
           conclusion: typeof data?.conclusion === 'string' ? data.conclusion : '',
           questions: strings(data?.questions),
           needsMe: strings(data?.needsMe),
+          // 模型没给 asks 就留空，按字面猜
+          needsMeAsks: Array.isArray(data?.asks) ? data.asks.filter((n): n is number => Number.isInteger(n) && n >= 0) : undefined,
           parent: b.isManual ? b.parent : parent,
           tech: b.tech === undefined ? undefined : { ...b.tech, outlineTokens: b.tech.outlineTokens + spent },
         }
@@ -689,6 +692,7 @@ async function changeStatus($: EngineInterface, pick: (current: Status) => Statu
   if (index === undefined && target !== undefined && !(await passesReview($, target, pick(target.status)))) return
   let change: StatusChange | undefined
   let verdict: Status | undefined
+  let told = false
   await setBlocks($, all =>
     all.map(b => {
       if (b.id !== blockId) return b
@@ -712,18 +716,26 @@ async function changeStatus($: EngineInterface, pick: (current: Status) => Statu
       const from = itemStatus(b, index)
       marks[index] = pick(from)
       change = { key, what: `需要用户做的「${b.needsMe[index] ?? ''}」（块 [${b.id}]「${b.title}」）`, from, to: marks[index]! }
-      if (verdicts.has(key) || isAnswer(marks[index]!)) verdict = marks[index]!
+      if (verdicts.has(key) || (isAnswer(marks[index]!) && isQuestion(b, index))) verdict = marks[index]!
+      else if (isAnswer(marks[index]!)) told = true
       return { ...b, needsMeStatus: marks }
     }),
   )
   if (change !== undefined) await noteChange($, change)
   if (verdict !== undefined) noteVerdict($, key, verdict)
+  if (told) $.ui.toast('记下了：这是交给你做的事，不单独发，下次发消息时一起告诉 Claude')
 }
 
 // ---------- 验收没通过、回答了是或否：交给 Claude 回应 ----------
 
 /** Yes / No 是我对它问题的回答 */
 const isAnswer = (st: Status) => st === 'YES' || st === 'NO'
+
+/** 旧的条目没有模型标过是不是问题，按字面猜：问号结尾，或者带「是否」「要不要」「要我」 */
+const LOOKS_ASKED = /[？?]\s*$|是否|要不要|要我/
+
+/** 「需要我做」第 index 条是不是问我的问题：是的话答 Yes / No 要马上告诉 Claude，交给我做的事就等下一条消息 */
+const isQuestion = (b: Block, index: number) => (b.needsMeAsks === undefined ? LOOKS_ASKED.test(b.needsMe[index] ?? '') : b.needsMeAsks.includes(index))
 
 /** 我给了这个状态，Claude 该怎么接 */
 const VERDICT: Partial<Record<Status, string>> = {
@@ -775,10 +787,12 @@ async function sendVerdicts($: EngineInterface) {
   const lines = found.map(one => one.line)
   const answers = found.filter(one => isAnswer(one.st)).length
   const head = answers === found.length ? '我在大纲侧栏里回答了你问的这些事，请照着接着做：' : answers === 0 ? '我在大纲侧栏验收时，没让下面这些事通过。请逐条回应：' : '我在大纲侧栏里对下面这些事做了回复，请逐条接着处理：'
+  // 简单的回答别展开：答完不需要再做事的，回一句就够了
+  const brief = answers > 0 ? ['', '这些回答要是不需要你再做什么，回一句「收到」就行，别展开。'] : []
   // mod 自己发的消息不经过自己的 prompt.submit 钩子：侧栏里改过的状态直接接在正文后面
   const told = await takeChanges($)
   const parallel = lines.length > 1 ? ['', PARALLEL] : []
-  await $.prompt.submit({ text: [head, ...lines, ...parallel, ...(told === undefined ? [] : ['', told])].join('\n') })
+  await $.prompt.submit({ text: [head, ...lines, ...brief, ...parallel, ...(told === undefined ? [] : ['', told])].join('\n') })
 }
 
 /** 同一处改了几次只记最后一次；改回原样就不用说了 */

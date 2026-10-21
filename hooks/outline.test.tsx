@@ -20,7 +20,7 @@ const PANE = {
 const USAGE = { input_tokens: 100, output_tokens: 200, cache_read_input_tokens: 900, cache_creation_input_tokens: 0 }
 
 const REPLIES = () => [
-  { title: '给随机漫步加时间筛选', status: 'WAITING', did: ['加了 7 天 / 1 个月 / 全部三档'], conclusion: '默认全部', questions: [], needsMe: ['确认第 4 档是什么'], parent: null, resolved: [] },
+  { title: '给随机漫步加时间筛选', status: 'WAITING', did: ['加了 7 天 / 1 个月 / 全部三档'], conclusion: '默认全部', questions: [], needsMe: ['确认第 4 档是什么'], asks: [0], parent: null, resolved: [] },
   { title: '修 Hexo 部署', status: 'DONE', did: ['改了 _config.yml'], conclusion: '', questions: [], needsMe: [], parent: null, resolved: [] },
   { title: '第 4 档定为 3 个月', status: 'DONE', did: ['加了 3 个月档'], conclusion: '', questions: [], needsMe: [], parent: 'b1', resolved: ['b1'] },
 ]
@@ -719,5 +719,34 @@ test('待验收的块上按 Y 就是验收通过：同样要先看证据，算�
   expect(prompts.length).toBe(sent)
   await ui.press({ key: 'view-tech' })
   expect(await has(/拦下 0\/1 · 0%/)).toBe(true)
+  await ui.unmount()
+})
+
+test('「需要我做」里交给我做的事答 Yes 不单独发；问我的问题才马上发，并让 Claude 不用做事时只回一句', async ($, on) => {
+  const reply = { title: '等我', status: 'WAITING', did: [], conclusion: '', questions: [], needsMe: ['重开终端看效果', '要我接着加吗？'], asks: [1], parent: null, resolved: [] }
+  const clock = engine(on, [], {}, [reply])
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.turn.start({ text: '做点事', turnId: 't1' })
+  await $.turn.complete({ answer: '好了', durationMs: 1000, isAborted: false, turnId: 't1', reason: 'answer', usage: { ...USAGE, model: 'claude-opus-5-5' } })
+  await clock.settle()
+  const ui = await $.ui.mount({ ...PANE, surface: 'vscode' })
+  await ui.press({ key: 'view-me' })
+  const sent = prompts.length
+
+  // 交给我做的事：答 Yes 只记下，等下一条消息
+  await ui.press({ key: 'block-b1#0' })
+  await ui.press({ key: 'yes' })
+  await clock.advance(5000)
+  expect(prompts.length).toBe(sent)
+
+  // 问我的问题：马上发
+  await ui.press({ key: 'block-b1#1' })
+  await ui.press({ key: 'yes' })
+  await clock.advance(5000)
+  expect(prompts.length).toBe(sent + 1)
+  expect(prompts.at(-1)).toContain('「要我接着加吗？」')
+  expect(prompts.at(-1)).toContain('回一句「收到」就行')
+  // 前面那条交给我做的事，作为状态改动一起带上
+  expect(prompts.at(-1)).toContain('「重开终端看效果」')
   await ui.unmount()
 })
