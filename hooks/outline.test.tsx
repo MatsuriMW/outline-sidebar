@@ -58,6 +58,7 @@ const engine = (on: On, copied: string[], stored: Record<string, unknown> = {}, 
   on('turn.start', (_, e) => ({ turnId: e.turnId }))
   on('prompt.submit', (_, e) => {
     contexts.push([...((e as { context?: string[] }).context ?? [])])
+    prompts.push((e as { text: string }).text)
     return { text: (e as { text: string }).text } as never
   })
   on('turn.complete', (_, e) => ({ text: e.answer }))
@@ -66,6 +67,8 @@ const engine = (on: On, copied: string[], stored: Record<string, unknown> = {}, 
 
 /** 每次发消息时附带的 context，看侧栏的状态改动有没有告诉 Claude */
 const contexts: string[][] = []
+/** 每次发出去的消息正文，看验收没通过时 mod 有没有替我发消息给 Claude */
+const prompts: string[] = []
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const play = async ($: any, clock: { settle: () => Promise<void> }) => {
@@ -438,7 +441,9 @@ test('按格子宽度折行：中文随处可断，英文单词不拆', async ()
   expect(wrapCells('短', 20)).toEqual(['短'])
 })
 
-test('「做了」挂证据；ToReview 先看证据才能改成 Done；⇧S 在负面状态之间转', async ($, on) => {
+/** 一轮待验收的活：改了一个文件、跑了两条命令（一条报错），三条「做了」里一条没证据 */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const reviewTurn = async ($: any, on: On) => {
   const reply = {
     title: '把测试修好', status: 'TOREVIEW', conclusion: '', questions: [], needsMe: [], parent: null, resolved: [],
     // 编号 9 对不上任何证据，要丢掉
@@ -452,6 +457,11 @@ test('「做了」挂证据；ToReview 先看证据才能改成 Done；⇧S 在�
   await $.tool.call({ tool: 'Bash', command: 'npm run fail' } as never)
   await $.turn.complete({ answer: '修好了', durationMs: 1000, isAborted: false, turnId: 't1', reason: 'answer', usage: { ...USAGE, model: 'claude-opus-5-5' } })
   await clock.settle()
+  return clock
+}
+
+test('「做了」挂证据；ToReview 先看证据才能改成 Done；⇧S 在负面状态之间转；技术信息视图里的验收指标', async ($, on) => {
+  await reviewTurn($, on)
 
   const ui = await $.ui.mount({ ...PANE, surface: 'vscode' })
   const has = async (text: RegExp) => (await ui.find({ type: 'Text', text })) !== undefined
@@ -479,5 +489,40 @@ test('「做了」挂证据；ToReview 先看证据才能改成 Done；⇧S 在�
   expect(await has(/^Failed$/)).toBe(true)
   await ui.press({ key: 'status-bad' })
   expect(await has(/^Errored$/)).toBe(true)
+
+  // 指标：3 条「做了」2 条有证据；验收 1 块、没拦下；Done 之后重开了 1 块
+  await ui.press({ key: 'view-tech' })
+  expect(await has(/证据 2\/3 · 67%/)).toBe(true)
+  expect(await has(/拦下 0\/1 · 0%/)).toBe(true)
+  expect(await has(/重开 1\/1 · 100%/)).toBe(true)
+  await ui.unmount()
+})
+
+test('验收没通过：停手 4 秒后交给 Claude，按最终状态说清返工还是追问；改回 Done 就不发', async ($, on) => {
+  const clock = await reviewTurn($, on)
+  const ui = await $.ui.mount({ ...PANE, surface: 'vscode' })
+  const has = async (text: RegExp) => (await ui.find({ type: 'Text', text })) !== undefined
+  await ui.press({ key: 'view-all' })
+  const sent = prompts.length
+
+  // ToReview → Failed → Errored：连按的时候不发，停手 4 秒后按最终的 Errored 发一条
+  await ui.press({ key: 'status-bad' })
+  await clock.advance(2000)
+  await ui.press({ key: 'status-bad' })
+  expect(await has(/^Errored$/)).toBe(true)
+  await clock.advance(3000)
+  expect(prompts.length).toBe(sent)
+  await clock.advance(2000)
+  expect(prompts.length).toBe(sent + 1)
+  expect(prompts.at(-1)).toContain('没让下面这些事通过')
+  expect(prompts.at(-1)).toContain('「把测试修好」：Errored。出错卡住了')
+  expect(prompts.at(-1)).not.toContain('Failed')
+  // 状态改动本身也作为结构化信息接在这条消息后面
+  expect(prompts.at(-1)).toContain('TOREVIEW → ERRORED')
+
+  // 又改回 Done：看最终状态，不发
+  await ui.press({ key: 'status' })
+  await clock.advance(5000)
+  expect(prompts.length).toBe(sent + 1)
   await ui.unmount()
 })

@@ -45,6 +45,12 @@ export type Block = {
   didEvidence?: number[][]
   /** 看过证据的时间：ToReview 要先看过证据才能改成 Done */
   reviewedAt?: number
+  /** 验收时被我放行过（ToReview → Done） */
+  reviewPassed?: true
+  /** 验收时被我拦下过（ToReview → 别的状态） */
+  reviewBlocked?: true
+  /** 标了 Done 之后被我重新打开过 */
+  isReopened?: true
   conclusion: string
   questions: string[]
   /** 需要我做什么；解决后保留，按状态显示成已完成 */
@@ -76,6 +82,21 @@ export type Block = {
 
 /** 一条证据：edit 是改了一个文件，run 是跑了一条命令；isOk 看工具有没有报错，tail 是输出的最后一行 */
 export type Evidence = { kind: 'edit' | 'run'; text: string; isOk: boolean; tail?: string }
+
+/** 验收和返工的指标，从块上的标记数出来；跨会话就是把各个会话的存档加起来 */
+export type Metrics = {
+  /** 挂过证据的「做了」一共几条，其中几条有证据 */
+  did: number
+  proven: number
+  /** 我验收过几块，其中拦下几块 */
+  reviewed: number
+  blocked: number
+  /** 标过 Done 的块，其中被重新打开的 */
+  finished: number
+  reopened: number
+  /** 我手动纠正过层级的块 */
+  fixed: number
+}
 
 export type Live = {
   startedAt: number
@@ -137,6 +158,8 @@ declare module 'claude-code' {
       changes: StatusChange[]
       /** 键盘在哪一层：视图栏选视图，或者进了某个视图在树里操作 */
       scope: 'tabs' | 'tree'
+      /** 所有会话加起来的验收指标，切到技术信息视图时重算 */
+      metricsAll: Metrics | null
     }
   }
 }

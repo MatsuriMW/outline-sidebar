@@ -1,4 +1,4 @@
-import type { Block, Evidence, Kind, Status, Tech, View } from '../types'
+import type { Block, Evidence, Kind, Metrics, Status, Tech, View } from '../types'
 import { PH } from './icons'
 import type { PhosphorIcon } from './icons'
 import { STATUS_INFO, isForMe, isOpenStatus, statusText } from './status'
@@ -49,6 +49,7 @@ export const KIND_BADGE: Record<Kind, { text: string; color: string } | undefine
 
 export type Field =
   | 'needsMe' | 'did' | 'proof' | 'files' | 'conclusion' | 'question' | 'resolved' | 'ask'
+  | 'coverage' | 'review' | 'reopen' | 'fix'
   | 'stats' | 'tokens' | 'cache' | 'time' | 'model' | 'skills' | 'mcp' | 'slash' | 'agents' | 'outline' | 'live' | 'last' | 'note'
 
 export const FIELD: Record<Field, { icon: PhosphorIcon | Mark; label: string }> = {
@@ -60,6 +61,10 @@ export const FIELD: Record<Field, { icon: PhosphorIcon | Mark; label: string }> 
   question: { icon: 'question', label: '还没解决的问题' },
   resolved: { icon: 'resolved', label: '在第几轮解决' },
   ask: { icon: 'ask', label: '我的原话' },
+  coverage: { icon: 'proof', label: '证据覆盖率：「做了」里有证据的比例' },
+  review: { icon: 'resolved', label: '验收拦下率：验收时没让通过的比例' },
+  reopen: { icon: 'past', label: '返工率：标了 Done 又被重新打开的比例' },
+  fix: { icon: 'pending', label: '手动纠正过层级的块' },
   stats: { icon: 'stats', label: '技术信息' },
   tokens: { icon: 'tokens', label: 'token（↑ 输入 ↓ 输出）' },
   cache: { icon: 'cache', label: '缓存命中率' },
@@ -366,6 +371,40 @@ export const toMarkdown = (list: readonly Block[], rows: readonly Row[], v: View
   }
   return `${out.join('\n')}\n`
 }
+
+// ---------- 验收指标 ----------
+
+export const NO_METRICS: Metrics = { did: 0, proven: 0, reviewed: 0, blocked: 0, finished: 0, reopened: 0, fixed: 0 }
+
+/** 从块上的标记数出验收指标：证据覆盖率、验收拦下率、返工率、纠正层级 */
+export const measure = (list: readonly Block[]): Metrics => {
+  const m = { ...NO_METRICS }
+  for (const b of list) {
+    if (b.kind !== 'turn') continue
+    if (b.didEvidence !== undefined) {
+      m.did += b.did.length
+      m.proven += b.didEvidence.filter(nums => nums.length > 0).length
+    }
+    if (b.reviewPassed === true || b.reviewBlocked === true) m.reviewed += 1
+    if (b.reviewBlocked === true) m.blocked += 1
+    if (b.status === 'DONE' || b.isReopened === true) m.finished += 1
+    if (b.isReopened === true) m.reopened += 1
+    if (b.isManual) m.fixed += 1
+  }
+  return m
+}
+
+export const addMetrics = (a: Metrics, b: Metrics): Metrics => ({
+  did: a.did + b.did, proven: a.proven + b.proven, reviewed: a.reviewed + b.reviewed, blocked: a.blocked + b.blocked,
+  finished: a.finished + b.finished, reopened: a.reopened + b.reopened, fixed: a.fixed + b.fixed,
+})
+
+const ratio = (word: string, n: number, total: number) => (total === 0 ? `${word} —` : `${word} ${n}/${total} · ${Math.round((n * 100) / total)}%`)
+
+export const metricsLines = (m: Metrics): Line[] => [
+  { parts: [{ field: 'coverage', text: ratio('证据', m.proven, m.did) }, { field: 'review', text: ratio('拦下', m.blocked, m.reviewed) }] },
+  { parts: [{ field: 'reopen', text: ratio('重开', m.reopened, m.finished) }, { field: 'fix', text: `纠正层级 ${m.fixed} 块` }] },
+]
 
 export const sumTech = (list: readonly Block[]): Tech | undefined => {
   const all = list.map(b => b.tech).filter((t): t is Tech => t !== undefined)

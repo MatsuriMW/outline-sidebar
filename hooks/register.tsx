@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { Elements, EngineInterface, Register } from 'claude-code'
 
-import type { AgendaGroup, Block, Body, Evidence, Kind, Level, Recap, Status, StatusChange, Tech, View } from '../types'
+import type { AgendaGroup, Block, Body, Evidence, Kind, Level, Metrics, Recap, Status, StatusChange, Tech, View } from '../types'
 import type { Field, Line, MenuItem } from './outline'
 import { PH, PH_SVG } from './icons'
 import type { PhosphorIcon } from './icons'
@@ -34,6 +34,9 @@ import {
   parseKeys,
   sumTech,
   techLines,
+  addMetrics,
+  measure,
+  metricsLines,
   textRows,
   toMarkdown,
   toTreeRows,
@@ -65,6 +68,7 @@ const recap = atom({ plugin: 'outline-sidebar', key: 'recap' } as const, null)
 const legend = atom({ plugin: 'outline-sidebar', key: 'legend' } as const, false)
 const changes = atom({ plugin: 'outline-sidebar', key: 'changes' } as const, [])
 const scope = atom({ plugin: 'outline-sidebar', key: 'scope' } as const, 'tabs')
+const metricsAll = atom({ plugin: 'outline-sidebar', key: 'metricsAll' } as const, null)
 
 /** 面板上（键盘不在树里）按 ⏎：Claude Code 只让鼠标点击把键盘交给树 */
 const ENTER_TIP = '用鼠标点一下下面的大纲树，键盘就进去了；之后选视图、⏎ 进入、⌫ 返回都在树里完成，别按 Esc'
@@ -95,7 +99,7 @@ const ACTIONS: { key: string; hotkey: string; label: string }[] = [
 ]
 
 /** 图例里列出的字段 */
-const LEGEND_FIELDS = ['needsMe', 'did', 'files', 'conclusion', 'question', 'resolved', 'ask', 'live', 'last', 'note', 'stats', 'tokens', 'cache', 'time', 'model', 'skills', 'mcp', 'slash', 'agents', 'outline'] as const
+const LEGEND_FIELDS = ['needsMe', 'did', 'proof', 'files', 'conclusion', 'question', 'resolved', 'ask', 'live', 'last', 'note', 'stats', 'tokens', 'cache', 'time', 'model', 'skills', 'mcp', 'slash', 'agents', 'outline', 'coverage', 'review', 'reopen', 'fix'] as const
 
 /** 图例占几行（终端），用来算树视图还剩多少高度 */
 const legendRows = (width: number) =>
@@ -483,6 +487,19 @@ async function keepCursorInView($: EngineInterface) {
 async function switchView($: EngineInterface, v: View) {
   await update($, view, () => v)
   await keepCursorInView($)
+  if (v === 'tech') await measureAll($)
+}
+
+/** 所有会话的验收指标：当前会话加上各个会话存下的大纲 */
+async function measureAll($: EngineInterface) {
+  const sid = await $.session.id()
+  let total: Metrics = measure(await read($, blocks))
+  for (const key of await $.store.keys()) {
+    if (!key.startsWith(STORE_PREFIX) || key === `${STORE_PREFIX}${sid}`) continue
+    const saved = (await $.store.get(key)) as Saved | undefined
+    if (Array.isArray(saved?.blocks)) total = addMetrics(total, measure(saved.blocks))
+  }
+  await update($, metricsAll, () => total)
 }
 
 /** 视图栏上 ←→：在数字键的顺序里挪一格 */
@@ -650,6 +667,7 @@ async function changeStatus($: EngineInterface, pick: (current: Status) => Statu
   const target = (await read($, blocks)).find(b => b.id === blockId)
   if (index === undefined && target !== undefined && !(await passesReview($, target, pick(target.status)))) return
   let change: StatusChange | undefined
+  let verdict: Status | undefined
   await setBlocks($, all =>
     all.map(b => {
       if (b.id !== blockId) return b
@@ -659,7 +677,15 @@ async function changeStatus($: EngineInterface, pick: (current: Status) => Statu
         const bare = b.did.filter((_, i) => b.didEvidence !== undefined && (b.didEvidence[i] ?? []).length === 0)
         const checked = b.status === 'TOREVIEW' && to === 'DONE' ? `（用户看过证据后验收${bare.length > 0 ? `；其中这几条没有工具调用能证明：${bare.join('；')}` : ''}）` : ''
         change = { key, what: `块 [${b.id}]「${b.title}」${checked}`, from: b.status, to }
-        return { ...b, status: to, isStatusManual: true, statusAt: now }
+        // 指标：验收放行 / 拦下，Done 之后重新打开（改成 Cancelled 不算返工）
+        const marks: Partial<Block> = {}
+        if (b.status === 'TOREVIEW' && to !== 'TOREVIEW') {
+          if (to === 'DONE') marks.reviewPassed = true
+          else marks.reviewBlocked = true
+        }
+        if (b.status === 'DONE' && to !== 'DONE' && to !== 'CANCELLED') marks.isReopened = true
+        if (b.status === 'TOREVIEW' || verdicts.has(b.id)) verdict = to
+        return { ...b, ...marks, status: to, isStatusManual: true, statusAt: now }
       }
       const marks = b.needsMe.map((_, i) => b.needsMeStatus?.[i] ?? null)
       const from = itemStatus(b, index)
@@ -669,6 +695,51 @@ async function changeStatus($: EngineInterface, pick: (current: Status) => Statu
     }),
   )
   if (change !== undefined) await noteChange($, change)
+  if (verdict !== undefined) noteVerdict($, blockId, verdict)
+}
+
+// ---------- 验收没通过：交给 Claude 回应 ----------
+
+/** 验收时我给了这个状态，Claude 该怎么接 */
+const VERDICT: Partial<Record<Status, string>> = {
+  FAILED: '没做成。先对照这一轮的改动和命令结果找原因：原因清楚就直接返工，改完让我再验收；拿不准哪里不对，先追问我，别瞎改。',
+  ERRORED: '出错卡住了。先排查报错、修好再继续；缺信息就追问我。',
+  HITLIMIT: '撞上了额度或用量上限。先停下，说明卡在哪个上限、大概什么时候能继续，别反复重试。',
+  SUSPENDED: '先搁置。别再动它，用两三句话记下现在做到哪、还差什么，方便以后接上。',
+  CANCELLED: '不做了。停下；这件事要是已经改了文件，列出改动，问我要不要撤回，我没同意之前别动。',
+  DOING: '还没做完。说清还差什么，接着做完，做完让我再验收。',
+}
+
+/** 等我停手再发：N 要连按几下才换到想要的状态 */
+const VERDICT_DELAY = 4000
+
+/** 验收时被我改了状态、还没交给 Claude 的块 */
+const verdicts = new Set<string>()
+let verdictRound = 0
+
+function noteVerdict($: EngineInterface, id: string, to: Status) {
+  verdicts.add(id)
+  const round = ++verdictRound
+  if (VERDICT[to] !== undefined) $.ui.toast(`${VERDICT_DELAY / 1000} 秒后交给 Claude 回应（${STATUS_INFO[to].label}），这期间还能接着换状态`)
+  $.clock.after(VERDICT_DELAY, () => {
+    if (round === verdictRound) void sendVerdicts($)
+  })
+}
+
+/** 停手以后看最终状态：没通过的发一条消息给 Claude，按状态说清怎么接；改回 Done 的就算了 */
+async function sendVerdicts($: EngineInterface) {
+  const ids = [...verdicts]
+  verdicts.clear()
+  const all = await read($, blocks)
+  const lines = ids.flatMap(id => {
+    const b = all.find(one => one.id === id)
+    const how = b === undefined ? undefined : VERDICT[b.status]
+    return b === undefined || how === undefined ? [] : [`- 块 [${b.id}]「${b.title}」：${STATUS_INFO[b.status].label}。${how}`]
+  })
+  if (lines.length === 0) return
+  // mod 自己发的消息不经过自己的 prompt.submit 钩子：侧栏里改过的状态直接接在正文后面
+  const told = await takeChanges($)
+  await $.prompt.submit({ text: ['我在大纲侧栏验收时，没让下面这些事通过。请逐条回应：', ...lines, ...(told === undefined ? [] : ['', told])].join('\n') })
 }
 
 /** 同一处改了几次只记最后一次；改回原样就不用说了 */
@@ -1355,6 +1426,7 @@ export const register: Register = (on, options) => {
     const zoomed = zoomId === null ? undefined : list.find(b => b.id === zoomId)
     const waiting = waitingCount(list)
     const total = v === 'tech' ? sumTech(list) : undefined
+    const allMetrics = v === 'tech' ? await read($, metricsAll) : null
 
     const drawIcon = (icon: PhosphorIcon, color: string) =>
       desk === undefined ? <Text color={color}>{PH[icon]}</Text> : <desk.Svg source={phosphorIconSvg(icon, color)} alt={icon} width={ICON_PX} height={ICON_PX} />
@@ -1449,6 +1521,14 @@ export const register: Register = (on, options) => {
             {techLines(total).map(line => drawLine(line, '  '))}
           </Box>
         )}
+        {v === 'tech' && (
+          <Box flexDirection="column">
+            <Text bold>验收与返工 · 本次会话</Text>
+            {metricsLines(measure(list)).map(line => drawLine(line, '  '))}
+            {allMetrics !== null && <Text bold>验收与返工 · 所有会话</Text>}
+            {allMetrics !== null && metricsLines(allMetrics).map(line => drawLine(line, '  '))}
+          </Box>
+        )}
         <Text dimColor>{'─'.repeat(Math.max(1, Math.min(width, 60)))}</Text>
       </Box>
     )
@@ -1467,6 +1547,7 @@ export const register: Register = (on, options) => {
         (isLegend ? legendRows(width) : 0) +
         (zoomed === undefined ? 0 : 1) +
         (total === undefined ? 0 : 1 + techLines(total).length) +
+        (v === 'tech' ? 3 + (allMetrics === null ? 0 : 3) : 0) +
         1
       const height = Math.max(6, e.props.scroll.bodyRows - headerRows)
       return (
