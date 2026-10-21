@@ -777,7 +777,10 @@ async function changeStatus($: EngineInterface, pick: (current: Status) => Statu
       else if (isAnswer(marks[index]!)) told = true
       // 我手动改过的，「自动」记号清掉
       const auto = b.needsMe.map((_, i) => (i === index ? null : (b.needsMeAuto?.[i] ?? null)))
-      return { ...b, needsMeStatus: marks, needsMeAuto: auto }
+      const next = { ...b, needsMeStatus: marks, needsMeAuto: auto }
+      // 最后一条也了结了，在等我的块跟着 Done；待验收的块还得我验收，不跟着变
+      const isAllSettled = b.needsMe.every((_, i) => !isOpenStatus(itemStatus(next, i)))
+      return isAllSettled && isForMe(b.status) && b.status !== 'TOREVIEW' ? { ...next, status: 'DONE' as const, statusAt: now } : next
     }),
   )
   if (change !== undefined) await noteChange($, change)

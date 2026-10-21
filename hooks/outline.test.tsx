@@ -856,3 +856,29 @@ test('「需要我做」的事按条自动了结：我说的直接 Done，Claude
   expect(await row('')).toContain('Skip|  |看一眼日志')
   await ui.unmount()
 })
+
+test('手动把「需要我做」的最后一条标完，在等我的块跟着 Done；待验收的块不跟着变', async ($, on) => {
+  const reply = (title: string, status: string) => ({ title, status, did: [], conclusion: '', questions: [], needsMe: ['甲', '乙'], parent: null, resolved: [] })
+  const clock = engine(on, [], {}, [reply('等我两件事', 'WAITING'), reply('等我验收', 'TOREVIEW')])
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  for (const turnId of ['t1', 't2']) {
+    await $.turn.start({ text: '做点事', turnId })
+    await $.turn.complete({ answer: '好了', durationMs: 1000, isAborted: false, turnId, reason: 'answer', usage: { ...USAGE, model: 'claude-opus-5-5' } })
+    await clock.settle()
+  }
+  const ui = await $.ui.mount({ ...PANE, surface: 'vscode' })
+  const has = async (text: RegExp) => (await ui.find({ type: 'Text', text })) !== undefined
+  await ui.press({ key: 'view-me' })
+  for (const key of ['block-b1#0', 'block-b2#0']) {
+    await ui.press({ key })
+    await ui.press({ key: 'done' })
+  }
+  expect(await has(/^Waiting$/)).toBe(true)
+  for (const key of ['block-b1#1', 'block-b2#1']) {
+    await ui.press({ key })
+    await ui.press({ key: 'done' })
+  }
+  expect(await has(/^Waiting$/)).toBe(false)
+  expect(await has(/^ToReview$/)).toBe(true)
+  await ui.unmount()
+})
