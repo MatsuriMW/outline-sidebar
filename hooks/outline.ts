@@ -181,13 +181,16 @@ export const parseKey = (key: string) => {
   return at < 0 ? { blockId: key } : { blockId: key.slice(0, at), index: Number(key.slice(at + 1)) }
 }
 
+/** 层级「去掉 Done」藏起来的状态：做完的、不做了的、我已经答过是或否的 */
+const SETTLED: readonly Status[] = ['DONE', 'CANCELLED', 'YES', 'NO']
+
 /**
  * 按视图把树摊成可见的行。除「全部」外都是 sparse tree：命中的块和它们的祖先，其余不显示。
- * hideDone（层级「去掉 Done」）：Done 的块也不算命中，下面还有没做完的子块时留着当上下文
+ * hideDone（层级「去掉 Done」）：已了结的块和「需要我做」条目也不算命中，块下面还有没了结的子块时留着当上下文
  */
 export const visibleRows = (list: readonly Block[], v: View, folded: readonly string[], zoom: string | null, open: readonly string[] = [], hideDone = false): Row[] => {
   const isFiltered = v !== 'all' || hideDone
-  const hit = (b: Block) => matches(b, v) && !(hideDone && b.status === 'DONE')
+  const hit = (b: Block) => matches(b, v) && !(hideDone && SETTLED.includes(b.status))
   const keep = new Set<string>()
   if (isFiltered) {
     for (const b of list) {
@@ -210,7 +213,9 @@ export const visibleRows = (list: readonly Block[], v: View, folded: readonly st
     }
     // 「需要我做」的条目排在子块前面，各占一行
     const showItems = (v === 'me' || open.includes(b.id)) && !(isFiltered && !hit(b))
-    const items: Node[] = showItems ? b.needsMe.map((text, index) => ({ block: b, item: { index, text, status: itemStatus(b, index) } })) : []
+    const items: Node[] = showItems
+      ? b.needsMe.map((text, index) => ({ block: b, item: { index, text, status: itemStatus(b, index) } })).filter(one => !(hideDone && SETTLED.includes(one.item.status)))
+      : []
     const kids: Node[] = [...items, ...shown(childrenOf(list, b.id)).map(block => ({ block }))]
     const isFolded = folded.includes(b.id) && kids.length > 0
     rows.push({
