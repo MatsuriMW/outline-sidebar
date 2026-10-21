@@ -2,6 +2,10 @@
 
 Claude Code 的 mod：把一次会话整理成 Logseq 式的可折叠大纲侧栏。一轮对话是一块，顺着同一个话题深入就成为子块，换了话题就是新的顶层块。层级由 AI 出初稿，你在侧栏里手动纠正。
 
+> **English.** A Claude Code mod that turns a session into a collapsible, Logseq-style outline sidebar: one block per turn, filtered into views like *what I need to do*, *what I asked it to do* and *what it has done*. It works on the human side of the harness: every "done" claim carries evidence pulled straight from tool calls, review is gated on looking at that evidence, and the statuses you set (approve, rework, unclear, yes / no, skip) flow back to Claude as structured updates, so it reworks, explains or carries on without you retyping anything. Built for the Claude Code CLI, with extra care for CJK input methods (it switches your keyboard to English when you click into the sidebar). The desktop app can open it but is not polished yet. The docs below are in Chinese.
+>
+> Install: `/plugin install outline-sidebar --marketplace MatsuriMW/outline-sidebar`
+
 > **目前适配 Claude Code CLI（终端）。** Desktop 版和 VS Code 里也能打开，但会退回成普通按钮，键盘操作、图标、中文排版都没调过，Desktop 版后面再做。
 
 它是我在 harness 工程上的一次实践。大多数 harness 管的是 Agent 那一侧：给它什么上下文、什么工具、怎么验证它的产出。这个 mod 管的是人那一侧：人怎么看清 Agent 做了什么，人的判断又怎么可靠地回到 Agent 那里。
@@ -256,3 +260,7 @@ AI 时代，最珍贵的是人类完整的、不被切分的注意力（undivide
 图标按 Maple Mono 的文字中心对齐过（`tools/align_icons.py`）。换了别的终端字体、觉得图标偏上或偏下，改脚本开头的 `CENTER` 和 `HEIGHT` 再跑一遍就行。
 
 改了代码后，在 Claude Code 里运行 `/reload-plugins` 生效。
+
+## 许可证
+
+代码用 MIT 许可证，见 [LICENSE](LICENSE)。`fonts/` 里的图标字体和代码里的图标路径取自 Phosphor Icons（MIT）和 Lucide（ISC），保留各自的许可证，见 [fonts/LICENSES.md](fonts/LICENSES.md)。

@@ -1,12 +1,13 @@
 {
   "name": "outline-sidebar-local",
   "owner": {
-    "name": "chenchen"
+    "name": "MatsuriMW"
   },
   "plugins": [
     {
       "name": "outline-sidebar",
-      "source": "./"
+      "source": "./",
+      "description": "Turn a Claude Code session into a collapsible outline sidebar: observability and a structured feedback loop on the human side of the harness."
     }
   ]
 }
