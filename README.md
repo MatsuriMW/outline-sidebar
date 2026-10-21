@@ -267,11 +267,11 @@ AI 时代，最珍贵的是人类完整的、不被切分的注意力（undivide
 
 - **调用模型总结**：每一轮结束后，用 Haiku（走你自己这个 Claude Code 会话的账号和额度）总结这一轮。发过去的是：你这一轮的原话（前 2000 字）、Claude 的回答（前 4000 字）、这一轮改了哪些文件（只有文件名）、跑了哪些命令和输出的最后一行、子任务的结论，以及现有大纲的标题。按 `P` 刷新进度、按 `R` 生成回顾时也会各调一次。花掉的 token 在技术信息视图里单独记成「大纲自己的开销」。
 - **替你发消息**：验收不通过、或者按 Y / N 回答问题之后，停手 4 秒，会以 mod 的名义在这个会话里给 Claude 发一条消息；你在侧栏改过的状态，会附在你下一条消息后面带给 Claude。
-- **运行本机程序**（只在 macOS）：点进侧栏时切到英文键盘，回到对话框时切回原来的输入法。用的是 `tools/ascii-input.swift`，第一次用时用 `swiftc` 编译到 `bin/ascii-input`，之后直接运行。它只调用 macOS 的输入源接口，不联网。没装 Xcode 命令行工具就跳过这一步。
+- **运行本机程序**（只在 macOS）：点进侧栏时切到英文键盘，回到对话框时切回原来的输入法。用的是 `tools/ascii-input.swift`，第一次用时用 `swiftc` 编译到 `bin/switch-input`，之后直接运行；要切回的输入法 ID 用环境变量 `ASCII_INPUT_TO` 传给它。它只调用 macOS 的输入源接口，不联网。没装 Xcode 命令行工具就跳过这一步。
 - **读的东西**：这个会话里的工具调用（文件名、命令和成没成、输出的最后一行），用来给「做了」挂证据；不读文件内容。
 - **存的东西**：每个会话的大纲存在 Claude Code 给插件的本地存储里（`~/.claude/plugins/store/`），最多留 100 个会话，`/agenda` 和跨会话的指标读的就是这些。
 - **写的东西**：只有 `/outline export` 会写文件，写到你给的路径；按 `X` 是复制到剪贴板。
-- **运行的程序**：只有三个，命令都写在 `hooks/register.tsx` 里：`<插件目录>/bin/ascii-input [输入源 ID]`（切输入法）、`/bin/mkdir -p <插件目录>/bin` 和 `/usr/bin/swiftc -O <插件目录>/tools/ascii-input.swift -o <插件目录>/bin/ascii-input`（第一次用时编译它）。
+- **运行的程序**：只有三条命令，都在插件目录里运行，在 `hooks/register.tsx` 里写成固定文本：`./bin/switch-input`（切输入法）、`/bin/mkdir -p bin` 和 `/usr/bin/swiftc -O tools/ascii-input.swift -o bin/switch-input`（第一次用时编译它，每次加载最多试一次）。不运行别的命令，也不运行从网上、模型回答或工具调用里拿到的任何东西。
 - **不做的事**：不自己联网，不上报任何数据，不读任何凭证或 API key，不改 Claude Code 的权限设置，不替你执行斜杠命令，不自己调用工具。代码里出现的「token」都是指模型用量的 token 数；`www.w3.org` 是桌面版 SVG 图标的命名空间，不发请求。
 
 ### 挂了哪些钩子
@@ -290,7 +290,13 @@ AI 时代，最珍贵的是人类完整的、不被切分的注意力（undivide
 | `ui.render`（`Pane`）、`ui.message`、`ui.scroll` | 画侧栏和 Agenda 面板，接收大纲树里的按键、点击和滚轮 |
 
 
-**In English.** After each turn the mod asks Haiku, through your own Claude Code session, to summarize it (your prompt up to 2,000 characters, Claude's answer up to 4,000, edited file names, commands with their last output line, subtask conclusions and the outline's titles); `P` and `R` make one call each. After a review verdict or a Y / N answer it submits a message to Claude in the session, and attaches your sidebar status changes to your next message. On macOS it compiles `tools/ascii-input.swift` with `swiftc` on first use and runs it to switch the input source when you click into the sidebar and back. It reads the session's tool calls (file names, commands, last output line), never file contents. It stores each session's outline in Claude Code's local plugin store, up to 100 sessions, and writes a file only on `/outline export`. It makes no network requests of its own and sends no telemetry.
+**In English.** After each turn the mod asks Haiku, through your own Claude Code session, to summarize it (your prompt up to 2,000 characters, Claude's answer up to 4,000, edited file names, commands with their last output line, subtask conclusions and the outline's titles); `P` and `R` make one call each. After a review verdict or a Y / N answer it submits a message to Claude in the session, and attaches your sidebar status changes to your next message. On macOS it switches the input source to the US keyboard when you click into the sidebar and back when you return to the prompt, so letter keys reach the outline instead of a Chinese IME.
+
+What it runs: exactly three commands, each written as fixed text in `hooks/register.tsx` and run with the plugin's own folder as the working directory: `./bin/switch-input` (switches the input source; the source to switch back to is passed in the `ASCII_INPUT_TO` environment variable), and, on first use only, `/bin/mkdir -p bin` and `/usr/bin/swiftc -O tools/ascii-input.swift -o bin/switch-input` to build it from the Swift source in this repository (tried at most once per load). It runs nothing else, and nothing taken from the network, a model reply or a tool call.
+
+What it fetches: nothing. It makes no network requests of its own (no `$.http`), sends no telemetry, and reads no credentials. The only outbound traffic is the Haiku summaries above, sent through your own Claude Code session.
+
+What the `tool.call` hook does with the calls it sees: it lets every call through unchanged (never blocks, rewrites or adds a call), and after the call returns it records the tool's name (and which skills and MCP tools were used), the edited file names, the commands run with whether they succeeded and their last output line, as evidence for the turn's outline block. It never reads file contents and never acts on what a tool returned. It stores each session's outline in Claude Code's local plugin store, up to 100 sessions, and writes a file only on `/outline export`.
 
 ## 许可证
 

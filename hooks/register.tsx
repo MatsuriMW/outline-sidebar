@@ -83,7 +83,9 @@ const LEVELS: Level[] = ['overview', 'contents', 'all', 'undone']
 const LEVEL_LABEL: Record<Level, string> = { overview: '只看顶层', contents: '全部标题', all: '全部展开', undone: '去掉 Done' }
 
 /** 层级「去掉 Done」：Done 的块不显示 */
-const isHidingDone = async ($: EngineInterface) => (await read($, level)) === 'undone'
+async function isHidingDone($: EngineInterface) {
+  return (await read($, level)) === 'undone'
+}
 
 /** 工具栏：文字按钮（中文输入法下用不了字母快捷键时，点按钮或在树里按回车用菜单） */
 const ACTIONS: { key: string; hotkey: string; label: string }[] = [
@@ -246,10 +248,16 @@ type Saved = { blocks?: Block[]; cwd?: string; savedAt?: number }
 async function persist($: EngineInterface) {
   const sid = await $.session.id()
   await $.store.set(`${STORE_PREFIX}${sid}`, { blocks: await read($, blocks), cwd, savedAt: await $.clock.now() })
-  const keys = (await $.store.keys()).filter(k => k.startsWith(STORE_PREFIX))
+  const all = await $.store.keys()
+  const keys = all.filter(k => k.startsWith(STORE_PREFIX))
   if (keys.length <= STORE_KEEP) return
   // 超了才删，按最后保存的时间删最久没动过的：键的顺序是第一次写入的顺序，一直在用的老会话也排在前面
-  const dated = await Promise.all(keys.map(async key => ({ key, at: ((await $.store.get(key)) as Saved | undefined)?.savedAt ?? 0 })))
+  const dated = await Promise.all(
+    keys.map(async key => {
+      const stored = await $.store.get(key)
+      return { key, at: (stored as Saved | undefined)?.savedAt ?? 0 }
+    }),
+  )
   dated.sort((a, b) => a.at - b.at)
   for (const old of dated.slice(0, dated.length - STORE_KEEP)) await $.store.delete(old.key)
 }
@@ -265,11 +273,13 @@ const legacyBlocks = { plugin: 'org-inspired-chat', key: 'blocks' } as const
 
 async function restore($: EngineInterface) {
   if ((await read($, blocks)).length === 0) {
-    const { value: old = [] } = await $.state.get(legacyBlocks)
+    const legacy = await $.state.get(legacyBlocks)
+    const old = legacy.value ?? []
     if (old.length > 0) await update($, blocks, () => old.map(b => ({ ...b, kind: b.kind ?? 'turn', status: normalizeStatus(String(b.status)) })))
   }
-  const saved = (await $.store.get(`${STORE_PREFIX}${await $.session.id()}`)) as Saved | undefined
-  const list = saved?.blocks
+  const sid = await $.session.id()
+  const stored = await $.store.get(`${STORE_PREFIX}${sid}`)
+  const list = (stored as Saved | undefined)?.blocks
   if ((await read($, blocks)).length === 0 && Array.isArray(list) && list.length > 0) {
     // 旧版本存下的块没有 kind，状态也是旧写法
     await update($, blocks, () => list.map(b => ({ ...b, kind: b.kind ?? 'turn', status: normalizeStatus(String(b.status)) })))
@@ -523,7 +533,8 @@ async function setCursor($: EngineInterface, key: string | null) {
   const all = await read($, blocks)
   const left = all.find(b => b.id === parseKey(before).blockId)
   if (left === undefined) return
-  const until = (await $.clock.now()) + FOLD_DELAY
+  const now = await $.clock.now()
+  const until = now + FOLD_DELAY
   await update($, lingering, map => ({ ...map, ...Object.fromEntries([left, ...ancestorsOf(all, left)].map(b => [b.id, until])) }))
   $.clock.after(FOLD_DELAY, () => void expireLingering($))
 }
@@ -576,7 +587,8 @@ async function measureAll($: EngineInterface) {
   let total: Metrics = measure(await read($, blocks))
   for (const key of await $.store.keys()) {
     if (!key.startsWith(STORE_PREFIX) || key === `${STORE_PREFIX}${sid}`) continue
-    const saved = (await $.store.get(key)) as Saved | undefined
+    const stored = await $.store.get(key)
+    const saved = stored as Saved | undefined
     if (Array.isArray(saved?.blocks)) total = addMetrics(total, measure(saved.blocks))
   }
   await update($, metricsAll, () => total)
@@ -596,32 +608,40 @@ async function enterView($: EngineInterface) {
 /** 点树之前用的输入法；回对话框敲第一个键时切回去 */
 let restoreInput: string | undefined
 
+/** 这次加载里有没有试过编译 bin/switch-input */
+let isBuildTried = false
+
 /** 面板上一次画的时候有没有键盘，用来只在刚拿到键盘那一下切输入法 */
 let isPaneFocused = false
 
 /**
  * 点进大纲树时切到英文键盘：中文输入法开着，J/K、T 这些字母会被拿去组字。
- * 用 tools/ascii-input.swift（第一次用时编译到 bin/），只在 macOS 上，失败了也不打扰
+ * 用 tools/ascii-input.swift（第一次用时编译到 bin/），只在 macOS 上，失败了也不打扰。
+ * 命令都写成固定文本、在插件目录里跑，官方目录才认得出这个 mod 只跑这几个程序
  */
 async function asciiInput($: EngineInterface) {
-  const tool = `${$.plugin.root}/bin/ascii-input`
-  const run = () =>
-    $.process.run([tool], { timeoutMs: 3000 }).then(
-      r => {
-        const before = r.stdout.trim()
-        // 原来就是英文就不用切回去；连着点几下，记的还是最早那个
-        if (r.exitCode === 0 && before !== '' && before !== 'com.apple.keylayout.US' && restoreInput === undefined) restoreInput = before
-        return r.exitCode === 0
-      },
-      () => false,
-    )
-  if (await run()) return
+  if ((await switchToAscii($)) || isBuildTried) return
+  // 编译最多试一次：编不出来、或者编出来也跑不了，就别每点一下都再编
+  isBuildTried = true
   try {
-    await $.process.run(['/bin/mkdir', '-p', `${$.plugin.root}/bin`])
-    const built = await $.process.run(['/usr/bin/swiftc', '-O', `${$.plugin.root}/tools/ascii-input.swift`, '-o', tool], { timeoutMs: 120000 })
-    if (built.exitCode === 0) await run()
+    await $.process.run(['/bin/mkdir', '-p', 'bin'], { cwd: $.plugin.root })
+    const built = await $.process.run(['/usr/bin/swiftc', '-O', 'tools/ascii-input.swift', '-o', 'bin/switch-input'], { cwd: $.plugin.root, timeoutMs: 120000 })
+    if (built.exitCode === 0) await switchToAscii($)
   } catch {
     // 不是 macOS，或者没装 Xcode 命令行工具：就不切了
+  }
+}
+
+/** 切到英文键盘，记下原来的输入法；还没编译过（或者切不了）就返回 false */
+async function switchToAscii($: EngineInterface) {
+  try {
+    const r = await $.process.run(['./bin/switch-input'], { cwd: $.plugin.root, timeoutMs: 3000 })
+    const before = r.stdout.trim()
+    // 原来就是英文就不用切回去；连着点几下，记的还是最早那个
+    if (r.exitCode === 0 && before !== '' && before !== 'com.apple.keylayout.US' && restoreInput === undefined) restoreInput = before
+    return r.exitCode === 0
+  } catch {
+    return false
   }
 }
 
@@ -740,13 +760,13 @@ async function reparent($: EngineInterface, direction: 'in' | 'out') {
 }
 
 /** 改光标所在那一行的状态：块，或者「需要我做」的某一条 */
-async function changeStatus($: EngineInterface, pick: (current: Status) => Status) {
+async function changeStatus($: EngineInterface, choose: (current: Status) => Status) {
   const key = await read($, cursor)
   if (key === null) return
   const { blockId, index } = parseKey(key)
   const now = await $.clock.now()
   const target = (await read($, blocks)).find(b => b.id === blockId)
-  if (index === undefined && target !== undefined && !(await passesReview($, target, pick(target.status)))) return
+  if (index === undefined && target !== undefined && !(await passesReview($, target, choose(target.status)))) return
   let change: StatusChange | undefined
   let verdict: Status | undefined
   let told = false
@@ -754,7 +774,7 @@ async function changeStatus($: EngineInterface, pick: (current: Status) => Statu
     all.map(b => {
       if (b.id !== blockId) return b
       if (index === undefined) {
-        const to = pick(b.status)
+        const to = choose(b.status)
         // 验收通过：告诉 Claude 是看过证据才通过的，没证据的那几条也说出来
         const bare = b.did.filter((_, i) => b.didEvidence !== undefined && (b.didEvidence[i] ?? []).length === 0)
         const checked = b.status === 'TOREVIEW' && to === 'DONE' ? `（用户看过证据后验收${bare.length > 0 ? `；其中这几条没有工具调用能证明：${bare.join('；')}` : ''}）` : ''
@@ -771,7 +791,7 @@ async function changeStatus($: EngineInterface, pick: (current: Status) => Statu
       }
       const marks = b.needsMe.map((_, i) => b.needsMeStatus?.[i] ?? null)
       const from = itemStatus(b, index)
-      marks[index] = pick(from)
+      marks[index] = choose(from)
       change = { key, what: `需要用户做的「${b.needsMe[index] ?? ''}」（块 [${b.id}]「${b.title}」）`, from, to: marks[index]! }
       if (verdicts.has(key) || (isAnswer(marks[index]!) && isQuestion(b, index))) verdict = marks[index]!
       else if (isAnswer(marks[index]!)) told = true
@@ -1215,7 +1235,8 @@ async function collectAgenda($: EngineInterface) {
   toGroup(sid, await read($, blocks), cwd.split('/').pop() ?? '', Number.MAX_SAFE_INTEGER, true)
   for (const key of await $.store.keys()) {
     if (!key.startsWith(STORE_PREFIX) || key === `${STORE_PREFIX}${sid}`) continue
-    const saved = (await $.store.get(key)) as Saved | undefined
+    const stored = await $.store.get(key)
+    const saved = stored as Saved | undefined
     if (!Array.isArray(saved?.blocks)) continue
     toGroup(key.slice(STORE_PREFIX.length), saved.blocks, saved.cwd?.split('/').pop() ?? '', saved.savedAt ?? 0, false)
   }
@@ -1225,11 +1246,13 @@ async function collectAgenda($: EngineInterface) {
 
 async function markAgendaDone($: EngineInterface, sid: string, blockId: string) {
   const done = (b: Block) => (b.id === blockId ? { ...b, status: 'DONE' as const, isStatusManual: true } : b)
-  if (sid === (await $.session.id())) {
+  const own = await $.session.id()
+  if (sid === own) {
     await setBlocks($, all => all.map(done))
   } else {
     const key = `${STORE_PREFIX}${sid}`
-    const saved = (await $.store.get(key)) as Saved | undefined
+    const stored = await $.store.get(key)
+    const saved = stored as Saved | undefined
     if (Array.isArray(saved?.blocks)) await $.store.set(key, { ...saved, blocks: saved.blocks.map(done) })
   }
   await collectAgenda($)
@@ -1318,7 +1341,7 @@ export const register: Register = (on, options) => {
     const back = restoreInput
     if (back === undefined || e.key === undefined) return next(e)
     restoreInput = undefined
-    void $.process.run([`${$.plugin.root}/bin/ascii-input`, back], { timeoutMs: 3000 }).catch(() => undefined)
+    void $.process.run(['./bin/switch-input'], { cwd: $.plugin.root, env: { ASCII_INPUT_TO: back }, timeoutMs: 3000 }).catch(() => undefined)
     return /^[a-zA-Z]$/.test(e.key.key) ? { text: e.text, cursor: e.cursor } : next(e)
   })
 
@@ -1411,7 +1434,8 @@ export const register: Register = (on, options) => {
 
     if (e.agentId !== undefined) {
       // 引擎自己的 fork（压缩、记忆）不在列表里，跳过
-      const info = (await $.agent.list()).find(a => a.id === e.agentId)
+      const agents = await $.agent.list()
+      const info = agents.find(a => a.id === e.agentId)
       if (info === undefined) return result
       const tokens = usageTotal(e.usage)
       const owner = agentOwner.get(e.agentId)
@@ -1672,9 +1696,9 @@ export const register: Register = (on, options) => {
     const empty = list.length === 0 ? `${PH.empty} 聊一轮，这里就会长出第一块` : rows.length === 0 ? '∅' : undefined
 
     // 终端里用树视图接 Logseq 式按键（中文输入法下也能用）；别的界面退回成按钮
-    if (e.surface === 'terminal' && 'Client' in els) {
-      // 和 Box、Text 一样直接从元素表里取，目录才认得出这里加载的是 ./tree-view.tsx
-      const { Client } = els
+    if (e.surface === 'terminal') {
+      // 判断 e.surface 后直接从 $.ui.resolve(e) 解构，目录才认得出这里加载的是 ./tree-view.tsx
+      const { Client } = $.ui.resolve(e)
       const viewLabels = keys.map((one, i) => `${i + 1}: ${VIEW_INFO[one].label}${one === 'me' && waiting > 0 ? ` ${waiting}` : ''}`)
       const actionLabels = ACTIONS.map(a => `${a.hotkey}: ${a.label}`)
       const headerRows =

@@ -475,7 +475,7 @@ export const metricsLines = (m: Metrics): Line[] => [
 export const sumTech = (list: readonly Block[]): Tech | undefined => {
   const all = list.map(b => b.tech).filter((t): t is Tech => t !== undefined)
   if (all.length === 0) return undefined
-  const unique = (pick: (t: Tech) => string[]) => [...new Set(all.flatMap(pick))]
+  const unique = (take: (t: Tech) => string[]) => [...new Set(all.flatMap(take))]
   return {
     durationMs: all.reduce((s, t) => s + t.durationMs, 0),
     model: '',
