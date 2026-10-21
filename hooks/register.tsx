@@ -1573,7 +1573,8 @@ export const register: Register = (on, options) => {
     return (
       <Box flexDirection="column" width={e.props.bodyColumns}>
         {header}
-        <Client module="./tree-view.tsx" key={TREE} props={paneTree} width={e.props.bodyColumns} />
+        {/* 直接调用 Client({ module, ... })，不写成 <Client /> 标签：目录的扫描只认这种写法 */}
+        {Client({ module: './tree-view.tsx', key: TREE, props: paneTree, width: e.props.bodyColumns })}
       </Box>
     )
   })
