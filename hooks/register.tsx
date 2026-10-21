@@ -82,11 +82,13 @@ const ACTIONS: { key: string; hotkey: string; label: string }[] = [
   { key: 'up', hotkey: 'k', label: '上' },
   { key: 'fold-up', hotkey: 't', label: '折叠到母块' },
   { key: 'unfold-down', hotkey: 'e', label: '展开子块' },
-  { key: 'detail', hotkey: 'd', label: '详情' },
+  { key: 'done', hotkey: 'd', label: 'Done' },
+  { key: 'yes', hotkey: 'y', label: 'Yes' },
+  { key: 'no', hotkey: 'n', label: 'No' },
   { key: 'indent', hotkey: 'l', label: '缩进' },
   { key: 'outdent', hotkey: 'h', label: '反缩进' },
   { key: 'status', hotkey: 's', label: '切状态' },
-  { key: 'status-bad', hotkey: 'n', label: '负面状态' },
+  { key: 'status-bad', hotkey: 'b', label: '负面状态' },
   { key: 'level', hotkey: 'o', label: '层级' },
   { key: 'zoom', hotkey: 'z', label: '聚焦' },
   { key: 'body', hotkey: 'f', label: '正文折叠' },
@@ -700,24 +702,30 @@ async function changeStatus($: EngineInterface, pick: (current: Status) => Statu
           else marks.reviewBlocked = true
         }
         if (b.status === 'DONE' && to !== 'DONE' && to !== 'CANCELLED') marks.isReopened = true
-        if (b.status === 'TOREVIEW' || verdicts.has(b.id)) verdict = to
+        if (b.status === 'TOREVIEW' || verdicts.has(key) || isAnswer(to)) verdict = to
         return { ...b, ...marks, status: to, isStatusManual: true, statusAt: now }
       }
       const marks = b.needsMe.map((_, i) => b.needsMeStatus?.[i] ?? null)
       const from = itemStatus(b, index)
       marks[index] = pick(from)
       change = { key, what: `需要用户做的「${b.needsMe[index] ?? ''}」（块 [${b.id}]「${b.title}」）`, from, to: marks[index]! }
+      if (verdicts.has(key) || isAnswer(marks[index]!)) verdict = marks[index]!
       return { ...b, needsMeStatus: marks }
     }),
   )
   if (change !== undefined) await noteChange($, change)
-  if (verdict !== undefined) noteVerdict($, blockId, verdict)
+  if (verdict !== undefined) noteVerdict($, key, verdict)
 }
 
-// ---------- 验收没通过：交给 Claude 回应 ----------
+// ---------- 验收没通过、回答了是或否：交给 Claude 回应 ----------
 
-/** 验收时我给了这个状态，Claude 该怎么接 */
+/** Yes / No 是我对它问题的回答 */
+const isAnswer = (st: Status) => st === 'YES' || st === 'NO'
+
+/** 我给了这个状态，Claude 该怎么接 */
 const VERDICT: Partial<Record<Status, string>> = {
+  YES: '我的回答是「是」，同意。照这个接着做。',
+  NO: '我的回答是「否」，不同意。别照原来的打算做；不清楚我想要什么就先问我。',
   REWORK: '方向对，细节要改。先复述你理解的要改哪几处，我确认了再动手，改完让我再验收。',
   UNCLEAR: '我没看懂你做了什么、为什么这么做。先别改代码，拿这一轮的改动和命令结果解释清楚：做了什么、为什么这样做、怎么验证的。',
   FAILED: '没做成。先对照这一轮的改动和命令结果找原因：原因清楚就直接返工，改完让我再验收；拿不准哪里不对，先追问我，别瞎改。',
@@ -730,10 +738,10 @@ const VERDICT: Partial<Record<Status, string>> = {
 const PARALLEL =
   '这几件里互不相干、不改同一批文件的，开子代理（Agent 工具）并行处理，一个子代理只管一件，做完把结果汇总给我；会改同一批文件的按顺序做，免得互相覆盖。Rework 要先复述等我确认、Unclear? 只做解释，这两种不用开子代理。'
 
-/** 等我停手再发：N 要连按几下才换到想要的状态 */
+/** 等我停手再发：B 要连按几下才换到想要的状态 */
 const VERDICT_DELAY = 4000
 
-/** 验收时被我改了状态、还没交给 Claude 的块 */
+/** 被我改了状态、还没交给 Claude 的行：块的 id，或者「需要我做」那一条的「块 id#第几条」 */
 const verdicts = new Set<string>()
 let verdictRound = 0
 
@@ -746,21 +754,28 @@ function noteVerdict($: EngineInterface, id: string, to: Status) {
   })
 }
 
-/** 停手以后看最终状态：没通过的发一条消息给 Claude，按状态说清怎么接；改回 Done 的就算了 */
+/** 停手以后看最终状态：没通过的、回答了是或否的，发一条消息给 Claude，按状态说清怎么接；改回 Done 的就算了 */
 async function sendVerdicts($: EngineInterface) {
-  const ids = [...verdicts]
+  const keys = [...verdicts]
   verdicts.clear()
   const all = await read($, blocks)
-  const lines = ids.flatMap(id => {
-    const b = all.find(one => one.id === id)
-    const how = b === undefined ? undefined : VERDICT[b.status]
-    return b === undefined || how === undefined ? [] : [`- 块 [${b.id}]「${b.title}」：${STATUS_INFO[b.status].label}。${how}`]
+  const found = keys.flatMap(key => {
+    const { blockId, index } = parseKey(key)
+    const b = all.find(one => one.id === blockId)
+    if (b === undefined) return []
+    const st = index === undefined ? b.status : itemStatus(b, index)
+    const how = VERDICT[st]
+    const what = index === undefined ? `块 [${b.id}]「${b.title}」` : `「${b.needsMe[index] ?? ''}」（块 [${b.id}]「${b.title}」）`
+    return how === undefined ? [] : [{ st, line: `- ${what}：${STATUS_INFO[st].label}。${how}` }]
   })
-  if (lines.length === 0) return
+  if (found.length === 0) return
+  const lines = found.map(one => one.line)
+  const answers = found.filter(one => isAnswer(one.st)).length
+  const head = answers === found.length ? '我在大纲侧栏里回答了你问的这些事，请照着接着做：' : answers === 0 ? '我在大纲侧栏验收时，没让下面这些事通过。请逐条回应：' : '我在大纲侧栏里对下面这些事做了回复，请逐条接着处理：'
   // mod 自己发的消息不经过自己的 prompt.submit 钩子：侧栏里改过的状态直接接在正文后面
   const told = await takeChanges($)
   const parallel = lines.length > 1 ? ['', PARALLEL] : []
-  await $.prompt.submit({ text: ['我在大纲侧栏验收时，没让下面这些事通过。请逐条回应：', ...lines, ...parallel, ...(told === undefined ? [] : ['', told])].join('\n') })
+  await $.prompt.submit({ text: [head, ...lines, ...parallel, ...(told === undefined ? [] : ['', told])].join('\n') })
 }
 
 /** 同一处改了几次只记最后一次；改回原样就不用说了 */
@@ -780,7 +795,7 @@ async function takeChanges($: EngineInterface) {
   await update($, changes, () => [])
   const lines = list.map(c => `- ${c.what}：${c.from} → ${c.to}`)
   return [
-    '用户在会话大纲侧栏里手动改了下面这些状态。这是用户在告诉你进展：「需要用户做」的事改成 DONE，表示用户已经做完了；块的状态改动表示用户对那件事的判断：DONE 是认可做完；REWORK 是方向对、细节要改；UNCLEAR 是用户没看懂，先解释别改；FAILED 是用户认为没做成，要返工，先弄清哪里不对；SUSPENDED 是先搁置、暂时别碰；CANCELLED 是不做了。据此接着做，不用复述这段说明。',
+    '用户在会话大纲侧栏里手动改了下面这些状态。这是用户在告诉你进展：「需要用户做」的事改成 DONE，表示用户已经做完了；块的状态改动表示用户对那件事的判断：DONE 是认可做完；YES、NO 是用户对你的问题答了「是」或「否」；REWORK 是方向对、细节要改；UNCLEAR 是用户没看懂，先解释别改；FAILED 是用户认为没做成，要返工，先弄清哪里不对；SUSPENDED 是先搁置、暂时别碰；CANCELLED 是不做了。据此接着做，不用复述这段说明。',
     ...lines,
   ].join('\n')
 }
@@ -888,6 +903,9 @@ async function runAction($: EngineInterface, action: string) {
   if (action === 'outdent') return reparent($, 'out')
   if (action === 'status') return cycleStatus($)
   if (action === 'status-bad') return changeStatus($, nextBadStatus)
+  if (action === 'done') return setStatus($, 'DONE')
+  if (action === 'yes') return setStatus($, 'YES')
+  if (action === 'no') return setStatus($, 'NO')
   if (action === 'level') return cycleLevel($)
   if (action === 'zoom') return toggleZoom($)
   if (action === 'body') return toggleBodyFold($)

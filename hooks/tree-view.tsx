@@ -73,8 +73,8 @@ const TreeView: ClientModule<TreeProps, State> = (props, surface) => {
 
   if (surface.state === undefined) {
     surface.setState({ top, menu: null, frame: 0 })
-    // Doing 的 loader-circle 转起来：8 个角度，0.8 秒一圈，和 todoseq 一样
-    surface.every(100, () => {
+    // Doing 的圆圈箭头转起来：8 个角度，1.6 秒一圈（0.8 秒一圈太快，看着闪）
+    surface.every(200, () => {
       if (hasSpinning) surface.setState({ ...(surface.state ?? { top: 0, menu: null, frame: 0 }), frame: ((surface.state?.frame ?? 0) + 1) % SPIN.length })
     })
   } else if (surface.state.top !== top) surface.setState({ ...surface.state, top })

@@ -28,10 +28,11 @@ PHOSPHOR = {
     'dot': 'circle', 'spinner': 'spinner',
 }
 LUCIDE = {
-    'todo': 'circle-dashed', 'bot': 'bot', 'doing': 'loader-circle', 'done': 'circle-check', 'paused': 'pause',
+    'todo': 'circle-dashed', 'bot': 'bot', 'doing': 'rotate-cw', 'done': 'circle-check', 'paused': 'pause',
     'waiting': 'hourglass', 'suspended': 'snowflake', 'cancelled': 'ban', 'failed': 'x', 'review': 'eye',
     'needok': 'hand', 'errored': 'badge-alert', 'hitlimit': 'gauge', 'delegated': 'send', 'queued': 'alarm-clock',
     'rework': 'pencil-line', 'unclear': 'message-circle-question',
+    'yes': 'thumbs-up', 'no': 'thumbs-down',
 }
 
 

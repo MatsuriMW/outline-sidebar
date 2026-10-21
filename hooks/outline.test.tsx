@@ -431,10 +431,10 @@ test('中文输入法下也能用：回车弹菜单改状态，空格展开详�
   await ui.key({ key: ' ', in: 'tree' })
   expect(await has(/默认全部/)).toBe(true)
 
-  // 回车弹菜单，往下选到 Failed，回车（详情之后是各个状态，Failed 排第 16 项）
+  // 回车弹菜单，往下选到 Failed，回车（详情之后是各个状态，Failed 排第 18 项）
   await ui.key({ key: 'return', in: 'tree' })
   expect(await has(/^详情$/)).toBe(true)
-  for (let i = 0; i < 16; i++) await ui.key({ key: 'down', in: 'tree' })
+  for (let i = 0; i < 18; i++) await ui.key({ key: 'down', in: 'tree' })
   await ui.key({ key: 'return', in: 'tree' })
   expect(await has(/^详情$/)).toBe(false)
   expect(await has(/Failed/)).toBe(true)
@@ -608,5 +608,34 @@ test('存档超过上限时删最久没保存的会话，不按写入顺序删�
   expect(await has(/^会话old3$/)).toBe(true)
   expect(await has(/^会话old1$/)).toBe(false)
   expect(await has(/^会话old2$/)).toBe(false)
+  await ui.unmount()
+})
+
+test('「需要我做」的事用 Y / N / D 回复：Yes、No 停手 4 秒后作为回答发给 Claude，Done 不发', async ($, on) => {
+  const clock = engine(on, [])
+  await play($, clock)
+  const ui = await $.ui.mount({ ...PANE, surface: 'vscode' })
+  const has = async (text: RegExp) => (await ui.find({ type: 'Text', text })) !== undefined
+  await ui.press({ key: 'view-me' })
+  await ui.press({ key: 'block-b1#0' })
+  const sent = prompts.length
+
+  await ui.press({ key: 'yes' })
+  expect(await has(/^Yes$/)).toBe(true)
+  await clock.advance(5000)
+  expect(prompts.length).toBe(sent + 1)
+  expect(prompts.at(-1)).toContain('我在大纲侧栏里回答了你问的这些事')
+  expect(prompts.at(-1)).toContain('「确认第 4 档是什么」（块 [b1]「给随机漫步加时间筛选」）：Yes。我的回答是「是」')
+
+  await ui.press({ key: 'no' })
+  expect(await has(/^No$/)).toBe(true)
+  await clock.advance(5000)
+  expect(prompts.at(-1)).toContain('：No。我的回答是「否」')
+
+  // Done 只在下一条消息里附带，不单独发
+  await ui.press({ key: 'done' })
+  expect(await has(/^Done$/)).toBe(true)
+  await clock.advance(5000)
+  expect(prompts.length).toBe(sent + 2)
   await ui.unmount()
 })

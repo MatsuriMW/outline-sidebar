@@ -39,6 +39,8 @@ export const STATUS_INFO: Record<Status, StatusInfo> = {
   WAITING: { label: 'Waiting', color: '#8f7fb6', group: 'waiting', icon: 'waiting', meaning: '在等用户或外部的东西', isForMe: true },
   SUSPENDED: { label: 'Suspended', color: '#a17f66', group: 'waiting', icon: 'suspended', meaning: '先搁置，暂时不做' },
   DONE: { label: 'Done', color: '#629c7f', group: 'completed', icon: 'done', meaning: '做完了' },
+  YES: { label: 'Yes', color: '#5f9e6e', group: 'completed', icon: 'yes', meaning: '用户回答了「是」，同意', isVerdict: true },
+  NO: { label: 'No', color: '#a4706b', group: 'completed', icon: 'no', meaning: '用户回答了「否」，不同意', isVerdict: true },
   FAILED: { label: 'Failed', color: '#93606b', group: 'completed', icon: 'failed', meaning: '做了但没成功' },
   CANCELLED: { label: 'Cancelled', color: '#a4a8ac', group: 'completed', icon: 'cancelled', meaning: '放弃了，不做了' },
 }
@@ -52,12 +54,12 @@ export const STATUSES = Object.keys(STATUS_INFO) as Status[]
 export const nextStatus = (st: Status): Status => {
   if (st === 'TODO') return 'DOING'
   if (st === 'DOING' || st === 'TOREVIEW') return 'DONE'
-  if (st === 'DONE' || st === 'FAILED' || st === 'CANCELLED') return 'TODO'
+  if (st === 'DONE' || st === 'YES' || st === 'NO' || st === 'FAILED' || st === 'CANCELLED') return 'TODO'
   return 'DOING'
 }
 
 /**
- * N 循环：我验收时下的几种「不通过」，从轻到重：要改、没看懂、没做成、搁置、不做了（⇧ 加首字母可以直接标）。
+ * B 循环：我验收时下的几种「不通过」，从轻到重：要改、没看懂、没做成、搁置、不做了（⇧ 加首字母可以直接标）。
  * Errored、Hit Limit! 是 Agent 那边报给我的，不在这里，由 mod 和总结的模型来标
  */
 export const BAD_STATUSES: readonly Status[] = ['REWORK', 'UNCLEAR', 'FAILED', 'SUSPENDED', 'CANCELLED']
@@ -99,7 +101,7 @@ const BODY: Record<LucideIcon, string> = {
     'M13.9 21.818a10 10 0 0 1-3.8 0', 'M6.391 20.279a10 10 0 0 1-2.69-2.7', 'M2.182 13.9a10 10 0 0 1 0-3.8', 'M3.721 6.391a10 10 0 0 1 2.7-2.69']
     .map((d, i) => `<path class="seg" style="--i:${i}" d="${d}"/>`).join(''),
   bot: P('M12 8V4H8') + '<rect x="4" y="8" width="16" height="12" rx="2"/>' + P('M2 14h2') + P('M20 14h2') + '<g class="eyes"><line x1="15" x2="15" y1="13" y2="15"/><line x1="9" x2="9" y1="13" y2="15"/></g>',
-  doing: P('M21 12a9 9 0 1 1-6.219-8.56', 'spin'),
+  doing: '<g class="spin">' + P('M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8') + P('M21 3v5h-5') + '</g>',
   done: '<circle cx="12" cy="12" r="10"/>' + P('m9 12 2 2 4-4', 'draw'),
   paused: '<rect class="l" x="6" y="4" width="4" height="16" rx="1"/><rect class="r" x="14" y="4" width="4" height="16" rx="1"/>',
   waiting: '<g class="flip">' + P('M5 22h14') + P('M5 2h14') + P('M17 22v-4.172a2 2 0 0 0-.586-1.414L12 12l-4.414 4.414A2 2 0 0 0 7 17.828V22') + P('M7 2v4.172a2 2 0 0 0 .586 1.414L12 12l4.414-4.414A2 2 0 0 0 17 6.172V2') + '</g>',
@@ -114,13 +116,15 @@ const BODY: Record<LucideIcon, string> = {
   delegated: '<g class="fly">' + P('M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z') + P('m21.854 2.147-10.94 10.939') + '</g>',
   rework: P('M13 21h8') + P('m15 5 4 4') + P('M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z', 'draw'),
   unclear: P('M2.992 16.342a2 2 0 0 1 .094 1.167l-1.065 3.29a1 1 0 0 0 1.236 1.168l3.413-.998a2 2 0 0 1 1.099.092 10 10 0 1 0-4.777-4.719') + P('M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3', 'draw') + P('M12 17h.01'),
+  yes: P('M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2a3.13 3.13 0 0 1 3 3.88Z') + P('M7 10v12'),
+  no: P('M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H20a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2.76a2 2 0 0 0-1.79 1.11L12 22a3.13 3.13 0 0 1-3-3.88Z') + P('M17 14V2'),
   queued: '<g class="ring">' + P('M18 20.5L19.5 22') + P('M6 20.5L4.5 22') + P('M21 13C21 17.968 16.968 22 12 22C7.032 22 3 17.968 3 13C3 8.032 7.032 4 12 4C16.968 4 21 8.032 21 13Z') + P('M15.339 15.862L12.549 14.197C12.063 13.909 11.667 13.216 11.667 12.649V8.95898') + '</g>' +
     '<g class="bells">' + P('M18 2L21.747 5.31064') + P('M6 2L2.25304 5.31064') + '</g>',
 }
 
 /** 动效照 todoseq styles.css：Doing 一直转；Todo、Done 只在刚换成这个状态时播一次 */
 const CSS = `svg *{transform-box:view-box;transform-origin:12px 12px}
-.spin{animation:s .8s linear infinite}@keyframes s{to{transform:rotate(360deg)}}
+.spin{animation:s 1.6s linear infinite}@keyframes s{to{transform:rotate(360deg)}}
 .hitlimit .needle{transform:translate(.5px,3px) rotate(72deg)}
 .fire .draw{stroke-dasharray:1;animation:d .4s ease-out both}.fire .draw.late{animation-delay:.2s}.fire .draw.slash{animation-delay:.5s}
 @keyframes d{from{stroke-dashoffset:1;opacity:0}25%{opacity:1}to{stroke-dashoffset:0;opacity:1}}

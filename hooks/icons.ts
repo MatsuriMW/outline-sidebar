@@ -4,7 +4,7 @@
 
 export type PhosphorIcon = 'did' | 'files' | 'conclusion' | 'question' | 'resolved' | 'ask' | 'stats' | 'tokens' | 'cache' | 'time' | 'model' | 'skills' | 'mcp' | 'slash' | 'agents' | 'outline' | 'live' | 'last' | 'note' | 'recap' | 'total' | 'empty' | 'folder' | 'celebrate' | 'pending' | 'past' | 'dot' | 'spinner'
 
-export type LucideIcon = 'todo' | 'bot' | 'doing' | 'done' | 'paused' | 'waiting' | 'suspended' | 'cancelled' | 'failed' | 'review' | 'needok' | 'errored' | 'hitlimit' | 'delegated' | 'queued' | 'rework' | 'unclear'
+export type LucideIcon = 'todo' | 'bot' | 'doing' | 'done' | 'paused' | 'waiting' | 'suspended' | 'cancelled' | 'failed' | 'review' | 'needok' | 'errored' | 'hitlimit' | 'delegated' | 'queued' | 'rework' | 'unclear' | 'yes' | 'no'
 
 /** Phosphor 图标在字体里的字（终端用） */
 export const PH: Record<PhosphorIcon, string> = {
@@ -42,7 +42,7 @@ export const PH: Record<PhosphorIcon, string> = {
 export const LU: Record<LucideIcon, string> = {
   todo: String.fromCodePoint(0x100100), // circle-dashed
   bot: String.fromCodePoint(0x100101), // bot
-  doing: String.fromCodePoint(0x100102), // loader-circle
+  doing: String.fromCodePoint(0x100102), // rotate-cw
   done: String.fromCodePoint(0x100103), // circle-check
   paused: String.fromCodePoint(0x100104), // pause
   waiting: String.fromCodePoint(0x100105), // hourglass
@@ -57,9 +57,11 @@ export const LU: Record<LucideIcon, string> = {
   queued: String.fromCodePoint(0x10010e), // alarm-clock
   rework: String.fromCodePoint(0x10010f), // pencil-line
   unclear: String.fromCodePoint(0x100110), // message-circle-question
+  yes: String.fromCodePoint(0x100111), // thumbs-up
+  no: String.fromCodePoint(0x100112), // thumbs-down
 }
 
-/** Doing 的 loader-circle 转 8 个角度，终端里按节拍轮流显示 */
+/** Doing 的 rotate-cw 转 8 个角度，终端里按节拍轮流显示 */
 export const SPIN = [String.fromCodePoint(0x100120), String.fromCodePoint(0x100121), String.fromCodePoint(0x100122), String.fromCodePoint(0x100123), String.fromCodePoint(0x100124), String.fromCodePoint(0x100125), String.fromCodePoint(0x100126), String.fromCodePoint(0x100127)]
 
 /** Phosphor 图标的 SVG 路径（桌面版用），方框是 0..size */

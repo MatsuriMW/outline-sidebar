@@ -43,7 +43,7 @@ AI 时代，最珍贵的是人类完整的、不被切分的注意力（undivide
 
 - **「做了」挂证据**：每一轮里改了哪些文件、跑了哪些命令、命令成没成、输出的最后一行，都直接从工具调用里记下来，不经过模型。总结时，模型只能从这些记录里挑出能证明某件事的那几条，挑不出就标「无证据」。
 - **验收关口**：状态是 ToReview 的块，要改成 Done，得先展开详情看过证据。没看过就按 S，这一下只会替你展开证据、不改状态，看完再按一次才算通过。通过时会告诉 Claude「用户看过证据后验收」，有哪几条「做了」没有证据，也一并说出来。
-- **验收没通过，Claude 接着回应**：⇧ 加首字母直接标成对应的状态，N 在它们之间从轻到重循环。待验收的块被标成这些状态，或者用 S 打回 Doing，停手 4 秒后（留时间换到想要的状态）mod 会替你发一条消息，按最终状态告诉 Claude 怎么接：
+- **验收没通过，Claude 接着回应**：⇧ 加首字母直接标成对应的状态，B 在它们之间从轻到重循环。待验收的块被标成这些状态，或者用 S 打回 Doing，停手 4 秒后（留时间换到想要的状态）mod 会替你发一条消息，按最终状态告诉 Claude 怎么接：
 
   | 键 | 状态 | Claude 怎么接 |
   |---|---|---|
@@ -54,7 +54,7 @@ AI 时代，最珍贵的是人类完整的、不被切分的注意力（undivide
   | ⇧C | Cancelled | 停下；已经改了文件就列出来，问你要不要撤回 |
   | S | Doing（打回） | 说清还差什么，接着做完 |
 
-  4 秒内改回 Done 就不发。Errored 和 Hit Limit! 不在这里：它们是 Agent 那边报给你的，不用你告诉它。一轮因 API 出错结束，mod 直接标成 Errored；出错时的回答里提到用量上限（rate limit、usage limit、额度这类字），就标成 Hit Limit!。这一步看的是字，引擎在这里不给错误种类。
+  4 秒内改回 Done 就不发。Claude 问你的问题（「要我接着加吗？」这类）也一样：在「需要我做的」里按 Y 或 N，停手 4 秒后作为回答发过去，它照着接着做。Errored 和 Hit Limit! 不在这里：它们是 Agent 那边报给你的，不用你告诉它。一轮因 API 出错结束，mod 直接标成 Errored；出错时的回答里提到用量上限（rate limit、usage limit、额度这类字），就标成 Hit Limit!。这一步看的是字，引擎在这里不给错误种类。
 
   一次打回好几件时，消息里还会让 Claude 把互不相干、不改同一批文件的几件交给子代理并行做，碰同一批文件的按顺序来；子代理在大纲里显示成那一轮下面的子块。
 - **指标**：6 号视图「技术信息」底部，按本次会话和所有会话各算一遍：证据覆盖率（「做了」里有证据的比例）、验收拦下率（验收时没让通过的比例）、返工率（标了 Done 又被重新打开的比例）、手动纠正过层级的块数。用来看这套 harness 到底有没有拦下东西、AI 的说法有多少能落到证据上。
@@ -105,10 +105,11 @@ AI 时代，最珍贵的是人类完整的、不被切分的注意力（undivide
 | `J` / `K` | 光标下移 / 上移（↓ / ↑ 也行） |
 | `T` | 在子块上按：折起它的母块，光标跳到母块；再按继续往上折一层。顶层块上按：开合它自己的子块 |
 | `E` | 和 T 反过来：展开光标所在块的子块，光标跳到第一个子块；再按继续往下一层 |
-| `D` | 展开 / 收起光标所在块的详情（空格也行）。ToReview 的块展开详情就算看过证据了 |
 | `L` / `H` | 缩进 / 反缩进：把这一块挂到上一块下面，或者提回上一层（⌥→ / ⌥← 也行）。手动改过的层级，AI 不会再动 |
 | `S` | 切状态：Todo → Doing → Done → Todo；ToReview 按一下是验收通过（要先看过证据）。点击只挪光标，不改状态 |
-| `N` | 验收不通过的几种状态，从轻到重循环：Rework → Unclear? → Failed → Suspended → Cancelled。待验收的块标成这些状态，停手 4 秒后交给 Claude 回应 |
+| `D` | 直接标成 Done。ToReview 的块同样要先看过证据 |
+| `Y` / `N` | 回答 Claude 的问题：Yes（是，同意）/ No（否，不同意）。多用在「需要我做的」里那些等你拍板的事上，停手 4 秒后作为回答发给 Claude，它照着接着做 |
+| `B` | 验收不通过的几种状态，从轻到重循环：Rework → Unclear? → Failed → Suspended → Cancelled。待验收的块标成这些状态，停手 4 秒后交给 Claude 回应 |
 | `⇧R` `⇧U` `⇧F` `⇧S` `⇧C` | 直接标成 Rework、Unclear?、Failed、Suspended、Cancelled（取英文首字母；只在终端的树里能用，按钮不分大小写） |
 | `O` | 层级循环：只看顶层 → 全部标题 → 全部展开 |
 | `Z` | 聚焦：只看光标所在的这一块和它的子块；再按退出 |
@@ -119,6 +120,7 @@ AI 时代，最珍贵的是人类完整的、不被切分的注意力（undivide
 | `G` | 跳转：对话滚到这一块对应的那条消息 |
 | `X` | 导出：把当前视图复制成 Markdown |
 | `I` | 图例：显示所有状态和字段图标的意思 |
+| 空格 | 展开 / 收起光标所在块的详情。ToReview 的块展开详情就算看过证据了 |
 
 ### 其他按键
 
@@ -131,7 +133,7 @@ AI 时代，最珍贵的是人类完整的、不被切分的注意力（undivide
 
 ### 状态
 
-`Todo` `Todo4AI` `Doing` `ToReview` `Rework` `Unclear?` `NeedOK?` `Errored` `Hit Limit!` `Queued` `Delegated` `Paused` `Waiting` `Suspended` `Done` `Failed` `Cancelled`，照 Obsidian 插件 todoseq 的那一套，另加了验收专用的 Rework 和 Unclear?（只给人用，总结的模型不会挑这两个）。Errored 和 Hit Limit! 反过来，是 Agent 报给人的，由 mod 在一轮出错结束时自动标；按 `I` 看每个图标的意思。
+`Todo` `Todo4AI` `Doing` `ToReview` `Rework` `Unclear?` `Yes` `No` `NeedOK?` `Errored` `Hit Limit!` `Queued` `Delegated` `Paused` `Waiting` `Suspended` `Done` `Failed` `Cancelled`，照 Obsidian 插件 todoseq 的那一套，另加了只给人用的 Rework、Unclear?（验收不通过）和 Yes、No（回答 Claude 的问题），总结的模型不会挑这几个。Errored 和 Hit Limit! 反过来，是 Agent 报给人的，由 mod 在一轮出错结束时自动标；按 `I` 看每个图标的意思。
 
 ## 安装
 
