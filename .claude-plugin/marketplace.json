@@ -3,6 +3,9 @@
   "owner": {
     "name": "MatsuriMW"
   },
+  "metadata": {
+    "description": "Outline Sidebar, a Claude Code mod: a collapsible outline sidebar for your session."
+  },
   "plugins": [
     {
       "name": "outline-sidebar",
