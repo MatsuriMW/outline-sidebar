@@ -261,6 +261,20 @@ AI 时代，最珍贵的是人类完整的、不被切分的注意力（undivide
 
 改了代码后，在 Claude Code 里运行 `/reload-plugins` 生效。
 
+## 它会运行、发送、读写什么
+
+装之前你应该知道的，全部列在这里，源码里也都能对上：
+
+- **调用模型总结**：每一轮结束后，用 Haiku（走你自己这个 Claude Code 会话的账号和额度）总结这一轮。发过去的是：你这一轮的原话（前 2000 字）、Claude 的回答（前 4000 字）、这一轮改了哪些文件（只有文件名）、跑了哪些命令和输出的最后一行、子任务的结论，以及现有大纲的标题。按 `P` 刷新进度、按 `R` 生成回顾时也会各调一次。花掉的 token 在技术信息视图里单独记成「大纲自己的开销」。
+- **替你发消息**：验收不通过、或者按 Y / N 回答问题之后，停手 4 秒，会以 mod 的名义在这个会话里给 Claude 发一条消息；你在侧栏改过的状态，会附在你下一条消息后面带给 Claude。
+- **运行本机程序**（只在 macOS）：点进侧栏时切到英文键盘，回到对话框时切回原来的输入法。用的是 `tools/ascii-input.swift`，第一次用时用 `swiftc` 编译到 `bin/ascii-input`，之后直接运行。它只调用 macOS 的输入源接口，不联网。没装 Xcode 命令行工具就跳过这一步。
+- **读的东西**：这个会话里的工具调用（文件名、命令和成没成、输出的最后一行），用来给「做了」挂证据；不读文件内容。
+- **存的东西**：每个会话的大纲存在 Claude Code 给插件的本地存储里（`~/.claude/plugins/store/`），最多留 100 个会话，`/agenda` 和跨会话的指标读的就是这些。
+- **写的东西**：只有 `/outline export` 会写文件，写到你给的路径；按 `X` 是复制到剪贴板。
+- **不做的事**：不自己联网，不上报任何数据，不改 Claude Code 的权限设置。
+
+**In English.** After each turn the mod asks Haiku, through your own Claude Code session, to summarize it (your prompt up to 2,000 characters, Claude's answer up to 4,000, edited file names, commands with their last output line, subtask conclusions and the outline's titles); `P` and `R` make one call each. After a review verdict or a Y / N answer it submits a message to Claude in the session, and attaches your sidebar status changes to your next message. On macOS it compiles `tools/ascii-input.swift` with `swiftc` on first use and runs it to switch the input source when you click into the sidebar and back. It reads the session's tool calls (file names, commands, last output line), never file contents. It stores each session's outline in Claude Code's local plugin store, up to 100 sessions, and writes a file only on `/outline export`. It makes no network requests of its own and sends no telemetry.
+
 ## 许可证
 
 代码用 MIT 许可证，见 [LICENSE](LICENSE)。`fonts/` 里的图标字体和代码里的图标路径取自 Phosphor Icons（MIT）和 Lucide（ISC），保留各自的许可证，见 [fonts/LICENSES.md](fonts/LICENSES.md)。

@@ -35,8 +35,12 @@ const WHEEL_LINES = 3
 /** 计时器只开一个，它看这个变量决定要不要转（模块里只有一棵树） */
 let hasSpinning = false
 
-/** ⌘/（终端把 ⌘ 报成 meta 时）或 Ctrl+/：在 Todo、Doing、Done 之间切 */
-const isCycleKey = (key: string, ctrl: boolean, meta: boolean) => (key === '/' && (ctrl || meta)) || (key === '_' && ctrl) || key === '\u001f'
+/**
+ * ⌘/（终端把 ⌘ 报成 meta 时）或 Ctrl+/：在 Todo、Doing、Done 之间切。
+ * 有的终端把 Ctrl+/ 报成 0x1f 这个控制字符；按编码比，源码里不写控制字符（mod 清单的扫描会把它当成 UI 兼容性问题）
+ */
+const isCycleKey = (key: string, ctrl: boolean, meta: boolean) =>
+  (key === '/' && (ctrl || meta)) || (key === '_' && ctrl) || (key.length === 1 && key.charCodeAt(0) === 0x1f)
 
 /**
  * 大纲的树：点一下拿到键盘。只用方向键、Tab、回车、空格、数字就能做完所有操作，
