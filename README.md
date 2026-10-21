@@ -50,13 +50,13 @@ AI 时代，最珍贵的是人类完整的、不被切分的注意力（undivide
   | ⇧R | Rework（要改） | 方向对、细节要改：先复述要改哪几处，你确认了再动手，改完再交给你验收 |
   | ⇧U | Unclear?（没看懂） | 先不改代码，拿这一轮的改动和命令结果解释清楚：做了什么、为什么、怎么验证的 |
   | ⇧F | Failed | 对照改动和命令结果找原因：原因清楚就返工，改完再交给你验收；拿不准就先追问你 |
-  | ⇧E | Errored | 排查报错、修好再继续；缺信息就追问你 |
-  | ⇧L | Hit Limit! | 停下，说明卡在哪个上限、什么时候能继续，不反复重试 |
   | ⇧S | Suspended | 不再动它，记下做到哪、还差什么，方便以后接上 |
   | ⇧C | Cancelled | 停下；已经改了文件就列出来，问你要不要撤回 |
   | S | Doing（打回） | 说清还差什么，接着做完 |
 
-  4 秒内改回 Done 就不发。一次打回好几件时，消息里还会让 Claude 把互不相干、不改同一批文件的几件交给子代理并行做，碰同一批文件的按顺序来；子代理在大纲里显示成那一轮下面的子块。
+  4 秒内改回 Done 就不发。Errored 和 Hit Limit! 不在这里：它们是 Agent 那边报给你的，不用你告诉它。一轮因 API 出错结束，mod 直接标成 Errored；出错时的回答里提到用量上限（rate limit、usage limit、额度这类字），就标成 Hit Limit!。这一步看的是字，引擎在这里不给错误种类。
+
+  一次打回好几件时，消息里还会让 Claude 把互不相干、不改同一批文件的几件交给子代理并行做，碰同一批文件的按顺序来；子代理在大纲里显示成那一轮下面的子块。
 - **指标**：6 号视图「技术信息」底部，按本次会话和所有会话各算一遍：证据覆盖率（「做了」里有证据的比例）、验收拦下率（验收时没让通过的比例）、返工率（标了 Done 又被重新打开的比例）、手动纠正过层级的块数。用来看这套 harness 到底有没有拦下东西、AI 的说法有多少能落到证据上。
 
 被打断以后，最快把注意力装回来的办法是看 3 号视图「我让它做的」：我当时原话怎么说的、它做成了几件、有几件有证据、还有几件在等我、结论是什么，一屏扫完。
@@ -108,8 +108,8 @@ AI 时代，最珍贵的是人类完整的、不被切分的注意力（undivide
 | `D` | 展开 / 收起光标所在块的详情（空格也行）。ToReview 的块展开详情就算看过证据了 |
 | `L` / `H` | 缩进 / 反缩进：把这一块挂到上一块下面，或者提回上一层（⌥→ / ⌥← 也行）。手动改过的层级，AI 不会再动 |
 | `S` | 切状态：Todo → Doing → Done → Todo；ToReview 按一下是验收通过（要先看过证据）。点击只挪光标，不改状态 |
-| `N` | 负面状态循环，从轻到重：Rework → Unclear? → Failed → Errored → Hit Limit! → Suspended → Cancelled。待验收的块标成这些状态，停手 4 秒后交给 Claude 回应 |
-| `⇧R` `⇧U` `⇧F` `⇧E` `⇧L` `⇧S` `⇧C` | 直接标成 Rework、Unclear?、Failed、Errored、Hit Limit!、Suspended、Cancelled（取英文首字母；只在终端的树里能用，按钮不分大小写） |
+| `N` | 验收不通过的几种状态，从轻到重循环：Rework → Unclear? → Failed → Suspended → Cancelled。待验收的块标成这些状态，停手 4 秒后交给 Claude 回应 |
+| `⇧R` `⇧U` `⇧F` `⇧S` `⇧C` | 直接标成 Rework、Unclear?、Failed、Suspended、Cancelled（取英文首字母；只在终端的树里能用，按钮不分大小写） |
 | `O` | 层级循环：只看顶层 → 全部标题 → 全部展开 |
 | `Z` | 聚焦：只看光标所在的这一块和它的子块；再按退出 |
 | `F` | 正文折叠：把对话里这一轮的消息改成一行摘要，和侧栏里的折叠无关 |
@@ -131,7 +131,7 @@ AI 时代，最珍贵的是人类完整的、不被切分的注意力（undivide
 
 ### 状态
 
-`Todo` `Todo4AI` `Doing` `ToReview` `Rework` `Unclear?` `NeedOK?` `Errored` `Hit Limit!` `Queued` `Delegated` `Paused` `Waiting` `Suspended` `Done` `Failed` `Cancelled`，照 Obsidian 插件 todoseq 的那一套，另加了验收专用的 Rework 和 Unclear?（只给人用，总结的模型不会挑这两个）；按 `I` 看每个图标的意思。
+`Todo` `Todo4AI` `Doing` `ToReview` `Rework` `Unclear?` `NeedOK?` `Errored` `Hit Limit!` `Queued` `Delegated` `Paused` `Waiting` `Suspended` `Done` `Failed` `Cancelled`，照 Obsidian 插件 todoseq 的那一套，另加了验收专用的 Rework 和 Unclear?（只给人用，总结的模型不会挑这两个）。Errored 和 Hit Limit! 反过来，是 Agent 报给人的，由 mod 在一轮出错结束时自动标；按 `I` 看每个图标的意思。
 
 ## 安装
 

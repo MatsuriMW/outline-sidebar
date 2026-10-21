@@ -569,3 +569,22 @@ test('一次打回好几件：消息里让 Claude 把互不相干的交给子代
   await clock.advance(5000)
   await ui.unmount()
 })
+
+test('Errored、Hit Limit! 由 mod 标：一轮因 API 出错结束就是 Errored，回答里说撞了用量上限就是 Hit Limit!', async ($, on) => {
+  // 模型说这两轮都做完了，但引擎说是出错结束的，以引擎为准
+  const reply = (title: string) => ({ title, status: 'DONE', did: [], conclusion: '', questions: [], needsMe: [], parent: null, resolved: [] })
+  const clock = engine(on, [], {}, [reply('修登录页'), reply('改导出格式')])
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  for (const [turnId, text, answer] of [['t1', '修登录页', 'API Error: 500 Internal server error'], ['t2', '改导出格式', 'API Error: Rate limit reached']] as const) {
+    await $.turn.start({ text, turnId })
+    await $.turn.complete({ answer, durationMs: 1000, isAborted: false, turnId, reason: 'error' } as never)
+    await clock.settle()
+  }
+  const ui = await $.ui.mount({ ...PANE, surface: 'vscode' })
+  const has = async (text: RegExp) => (await ui.find({ type: 'Text', text })) !== undefined
+  await ui.press({ key: 'view-all' })
+  expect(await has(/^Errored$/)).toBe(true)
+  expect(await has(/^Hit Limit!$/)).toBe(true)
+  expect(await has(/^Done$/)).toBe(false)
+  await ui.unmount()
+})

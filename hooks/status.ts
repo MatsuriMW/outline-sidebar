@@ -56,8 +56,11 @@ export const nextStatus = (st: Status): Status => {
   return 'DOING'
 }
 
-/** N 循环：只在不顺利的几个状态之间转，从轻到重：要改、没看懂、没做成、出错、撞上限、搁置、不做了（⇧ 加首字母可以直接标） */
-export const BAD_STATUSES: readonly Status[] = ['REWORK', 'UNCLEAR', 'FAILED', 'ERRORED', 'HITLIMIT', 'SUSPENDED', 'CANCELLED']
+/**
+ * N 循环：我验收时下的几种「不通过」，从轻到重：要改、没看懂、没做成、搁置、不做了（⇧ 加首字母可以直接标）。
+ * Errored、Hit Limit! 是 Agent 那边报给我的，不在这里，由 mod 和总结的模型来标
+ */
+export const BAD_STATUSES: readonly Status[] = ['REWORK', 'UNCLEAR', 'FAILED', 'SUSPENDED', 'CANCELLED']
 
 export const nextBadStatus = (st: Status): Status => BAD_STATUSES[(BAD_STATUSES.indexOf(st) + 1) % BAD_STATUSES.length]!
 

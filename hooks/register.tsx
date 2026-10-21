@@ -384,7 +384,15 @@ const parseDid = (value: unknown, count: number) => {
   return { did, proofs }
 }
 
-async function summarize($: EngineInterface, id: string, turn: Turn, answer: string, isAborted: boolean) {
+/** 一轮因 API 出错结束时，回答里出现这些字就当是撞上了用量上限（引擎在这里不给错误种类，只能看字） */
+const LIMIT_WORDS = /rate.?limit|usage limit|quota|429|额度|上限|限额/i
+
+/**
+ * Errored、Hit Limit! 是 Agent 那边的事，不用我告诉它：这一轮因 API 出错结束，mod 直接标，不等模型判断
+ */
+const errorStatus = (answer: string): Status => (LIMIT_WORDS.test(answer) ? 'HITLIMIT' : 'ERRORED')
+
+async function summarize($: EngineInterface, id: string, turn: Turn, answer: string, isAborted: boolean, isErrored = false) {
   const before = (await read($, blocks)).filter(b => b.id !== id && !b.isPending && b.live === undefined)
   const prompt = [
     describeOutline(before),
@@ -417,7 +425,9 @@ async function summarize($: EngineInterface, id: string, turn: Turn, answer: str
           // 模型没给标题、我又只贴了内容没打字时，拿回答的第一行顶上
           title: typeof data?.title === 'string' && data.title !== '' ? data.title : b.title !== '' ? b.title : clip(answer.trim().split('\n')[0] ?? '', 30),
           // 验收用的状态（Rework、Unclear?）只归我用，模型给了也不认
-          status: (STATUSES as string[]).includes(status) && STATUS_INFO[status as Status].isVerdict !== true ? (status as Status) : isAborted ? 'PAUSED' : 'DONE',
+          status: isErrored
+            ? errorStatus(answer)
+            : (STATUSES as string[]).includes(status) && STATUS_INFO[status as Status].isVerdict !== true ? (status as Status) : isAborted ? 'PAUSED' : 'DONE',
           statusAt: now,
           needsMeStatus: undefined,
           did: didParsed.did,
@@ -707,8 +717,6 @@ const VERDICT: Partial<Record<Status, string>> = {
   REWORK: '方向对，细节要改。先复述你理解的要改哪几处，我确认了再动手，改完让我再验收。',
   UNCLEAR: '我没看懂你做了什么、为什么这么做。先别改代码，拿这一轮的改动和命令结果解释清楚：做了什么、为什么这样做、怎么验证的。',
   FAILED: '没做成。先对照这一轮的改动和命令结果找原因：原因清楚就直接返工，改完让我再验收；拿不准哪里不对，先追问我，别瞎改。',
-  ERRORED: '出错卡住了。先排查报错、修好再继续；缺信息就追问我。',
-  HITLIMIT: '撞上了额度或用量上限。先停下，说明卡在哪个上限、大概什么时候能继续，别反复重试。',
   SUSPENDED: '先搁置。别再动它，用两三句话记下现在做到哪、还差什么，方便以后接上。',
   CANCELLED: '不做了。停下；这件事要是已经改了文件，列出改动，问我要不要撤回，我没同意之前别动。',
   DOING: '还没做完。说清还差什么，接着做完，做完让我再验收。',
@@ -768,7 +776,7 @@ async function takeChanges($: EngineInterface) {
   await update($, changes, () => [])
   const lines = list.map(c => `- ${c.what}：${c.from} → ${c.to}`)
   return [
-    '用户在会话大纲侧栏里手动改了下面这些状态。这是用户在告诉你进展：「需要用户做」的事改成 DONE，表示用户已经做完了；块的状态改动表示用户对那件事的判断：DONE 是认可做完；REWORK 是方向对、细节要改；UNCLEAR 是用户没看懂，先解释别改；FAILED 是用户认为没做成，要返工，先弄清哪里不对；ERRORED 是出了错卡住；HITLIMIT 是撞上额度或用量上限；SUSPENDED 是先搁置、暂时别碰；CANCELLED 是不做了。据此接着做，不用复述这段说明。',
+    '用户在会话大纲侧栏里手动改了下面这些状态。这是用户在告诉你进展：「需要用户做」的事改成 DONE，表示用户已经做完了；块的状态改动表示用户对那件事的判断：DONE 是认可做完；REWORK 是方向对、细节要改；UNCLEAR 是用户没看懂，先解释别改；FAILED 是用户认为没做成，要返工，先弄清哪里不对；SUSPENDED 是先搁置、暂时别碰；CANCELLED 是不做了。据此接着做，不用复述这段说明。',
     ...lines,
   ].join('\n')
 }
@@ -899,7 +907,7 @@ const DEPTH_KEYS: Record<string, number> = { '!': 1, '@': 2, '#': 3, '！': 1, '
 type KeyMessage = { type: 'key'; key: string; shift: boolean; ctrl: boolean; meta: boolean }
 
 /** ⇧ 加这些字母：直接标成对应的负面状态，不用按 N 一个个转 */
-const VERDICT_KEYS: Record<string, Status> = { r: 'REWORK', u: 'UNCLEAR', f: 'FAILED', e: 'ERRORED', l: 'HITLIMIT', s: 'SUSPENDED', c: 'CANCELLED' }
+const VERDICT_KEYS: Record<string, Status> = { r: 'REWORK', u: 'UNCLEAR', f: 'FAILED', s: 'SUSPENDED', c: 'CANCELLED' }
 
 /** 树视图里收到的按键，按 Logseq 的习惯来 */
 async function handleKey($: EngineInterface, k: KeyMessage, keys: readonly View[]) {
@@ -1359,7 +1367,7 @@ export const register: Register = (on, options) => {
       live === undefined ? [...list, block, ...branches] : [...list.map(b => (b.id === id ? { ...block, status: b.isStatusManual ? b.status : block.status } : b)), ...branches],
     )
     // 总结放到这次分发之外，不拖慢回合结束
-    $.clock.after(0, () => void summarize($, id, turn, e.answer, e.isAborted))
+    $.clock.after(0, () => void summarize($, id, turn, e.answer, e.isAborted, e.reason === 'error'))
     return result
   })
 
