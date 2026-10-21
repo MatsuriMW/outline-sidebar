@@ -1,0 +1,14 @@
+{
+  "name": "outline-sidebar",
+  "version": "0.3.0",
+  "description": "Outline Sidebar：把 Claude Code 会话变成 Logseq 式可折叠大纲侧边栏，一轮一块，按「结论 / 需要我做的 / 我让它做的 / 它已做的 / 技术信息」过滤",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "views": {
+      "type": "string",
+      "title": "数字键对应的视图",
+      "description": "用逗号分隔，按顺序对应数字键 1、2、3…。可选：conclusions（结论）、me（需要我做的）、asks（我让它做的）、all（全部）、done（它已做的）、tech（技术信息）。没写到的视图排在后面。",
+      "default": "conclusions,me,asks,all,done,tech"
+    }
+  }
+}

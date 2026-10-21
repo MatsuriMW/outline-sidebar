@@ -1,0 +1,417 @@
+import { expect, mock, test } from 'claude-code/testing'
+import type { On } from 'claude-code'
+
+import { wrapCells } from './outline'
+
+const PANE = {
+  plugin: 'outline-sidebar',
+  component: 'Pane',
+  requestId: 'outline',
+  props: {
+    title: '大纲',
+    isFocused: true,
+    bodyColumns: 60,
+    placement: 'dock',
+    scroll: { offset: 0, bodyRows: 40 },
+    view: {},
+  },
+} as const
+
+const USAGE = { input_tokens: 100, output_tokens: 200, cache_read_input_tokens: 900, cache_creation_input_tokens: 0 }
+
+const REPLIES = () => [
+  { title: '给随机漫步加时间筛选', status: 'WAITING', did: ['加了 7 天 / 1 个月 / 全部三档'], conclusion: '默认全部', questions: [], needsMe: ['确认第 4 档是什么'], parent: null, resolved: [] },
+  { title: '修 Hexo 部署', status: 'DONE', did: ['改了 _config.yml'], conclusion: '', questions: [], needsMe: [], parent: null, resolved: [] },
+  { title: '第 4 档定为 3 个月', status: 'DONE', did: ['加了 3 个月档'], conclusion: '', questions: [], needsMe: [], parent: 'b1', resolved: ['b1'] },
+]
+
+/** 引擎这一侧：每个 hook 替引擎回答 */
+const engine = (on: On, copied: string[], stored: Record<string, unknown> = {}) => {
+  const clock = mock.clock(on)
+  mock.store(on, stored)
+  const replies = REPLIES()
+  on('model.complete', (_, e) => {
+    const system = String((e as { system?: string }).system ?? '')
+    const isRecap = system.includes('回顾')
+    const isProgress = system.includes('做到哪一步')
+    const text = isProgress
+      ? JSON.stringify({ title: '修 Hexo 部署', did: ['找到了出错的目录'], note: '正在改配置，改完要重新部署', needsMe: [] })
+      : isRecap
+        ? '三件事都做完了，第 4 档定为 3 个月，没有在等你的事。'
+        : JSON.stringify(replies.shift())
+    return { value: { isAnswered: true, text, usage: USAGE } } as never
+  })
+  on('command.register', () => ({ value: { command: 'outline' } }) as never)
+  on('ui.open', () => ({ value: { isPlaced: true } }) as never)
+  on('ui.copy', (_, e) => {
+    copied.push((e as { text: string }).text)
+    return { value: { isCopied: true } } as never
+  })
+  on('ui.toast', () => ({ value: undefined }) as never)
+  on('session.id', () => ({ value: 'sess-1' }) as never)
+  on('agent.list', () => ({ value: [{ id: 'ag1', description: '查 Hexo 文档', type: 'Explore', status: 'completed' }] }) as never)
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('tool.call', () => ({ result: {} }) as never)
+  on('turn.start', (_, e) => ({ turnId: e.turnId }))
+  on('prompt.submit', (_, e) => {
+    contexts.push([...((e as { context?: string[] }).context ?? [])])
+    return { text: (e as { text: string }).text } as never
+  })
+  on('turn.complete', (_, e) => ({ text: e.answer }))
+  return clock
+}
+
+/** 每次发消息时附带的 context，看侧栏的状态改动有没有告诉 Claude */
+const contexts: string[][] = []
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const play = async ($: any, clock: { settle: () => Promise<void> }) => {
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  const complete = (turnId: string, answer: string, agentId?: string) =>
+    $.turn.complete({ answer, durationMs: 12000, isAborted: false, turnId, reason: 'answer', usage: { ...USAGE, model: 'claude-opus-5-5' }, ...(agentId === undefined ? {} : { agentId }) })
+
+  await $.prompt.submit({ text: '/obsidian-cli', command: { name: 'obsidian-cli', args: '' } } as never)
+  await $.turn.start({ text: '每日回顾的随机漫步加个时间筛选', turnId: 't1' })
+  await $.tool.call({ tool: 'Edit', file_path: '/vault/plugin/main.ts', old_string: 'a', new_string: 'b' } as never)
+  await $.tool.call({ tool: 'Skill', skill: 'obsidian-cli' } as never)
+  await $.tool.call({ tool: 'mcp__claude_ai_Linear__save_issue', title: 'x' } as never)
+  await complete('t1', '加好了，第 4 档你没说是什么')
+  await clock.settle()
+
+  await $.turn.start({ text: '博客部署挂了，帮我看看', turnId: 't2' })
+  await $.turn.start({ text: '查 Hexo 文档', turnId: 'sub1', agentId: 'ag1' })
+  await complete('sub1', 'Hexo 会忽略下划线开头的目录', 'ag1')
+  await complete('t2', '修好了')
+  await clock.settle()
+
+  await $.turn.start({ text: '第 4 档就 3 个月吧', turnId: 't3' })
+  await complete('t3', '加上了')
+  await clock.settle()
+}
+
+test('三轮对话：视图、子任务、技术信息、待办消解、导出（SVG 版）', async ($, on) => {
+  const copied: string[] = []
+  const clock = engine(on, copied)
+  await play($, clock)
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'vscode' })
+  const has = async (text: RegExp) => (await ui.find({ type: 'Text', text })) !== undefined
+
+  await ui.press({ key: 'view-all' })
+  expect(await has(/给随机漫步加时间筛选/)).toBe(true)
+  expect(await has(/\[子任务\]/)).toBe(true)
+  expect(await has(/查 Hexo 文档/)).toBe(true)
+  expect(await has(/^Done$/)).toBe(true)
+
+  // 需要我做的：第 4 档那一条单独一行，第 3 轮解决了，是 Done
+  await ui.press({ key: 'view-me' })
+  expect(await has(/^确认第 4 档是什么$/)).toBe(true)
+  expect(await has(/修 Hexo 部署/)).toBe(false)
+
+  // 我让它做的：不含子任务
+  await ui.press({ key: 'view-asks' })
+  expect(await has(/修 Hexo 部署/)).toBe(true)
+  expect(await has(/查 Hexo 文档/)).toBe(false)
+
+  // 它已做的：子任务的结论也在
+  await ui.press({ key: 'view-done' })
+  expect(await has(/改了 _config.yml/)).toBe(true)
+  expect(await has(/下划线开头/)).toBe(true)
+
+  // 技术信息：一行里几段「图标 字」，不记内置工具
+  await ui.press({ key: 'view-tech' })
+  expect(await has(/^90%$/)).toBe(true)
+  expect(await has(/^opus-5-5$/)).toBe(true)
+  expect(await has(/^obsidian-cli$/)).toBe(true)
+  expect(await has(/^Linear\/save_issue$/)).toBe(true)
+  expect(await has(/^×1$/)).toBe(true)
+  expect(await has(/^\/obsidian-cli$/)).toBe(true)
+  expect(await has(/^Edit$/)).toBe(false)
+  expect(await has(/^合计$/)).toBe(true)
+
+  // 导出：不用图标字体，换个地方打开也看得懂
+  await ui.press({ key: 'export' })
+  expect(copied.at(-1)).toContain('# 会话大纲：技术信息')
+  expect(copied.at(-1)).toContain('缓存命中率 90%')
+  await ui.press({ key: 'view-me' })
+  await ui.press({ key: 'export' })
+  expect(copied.at(-1)).toContain('Done 确认第 4 档是什么')
+
+  // 缩进、折叠
+  await ui.press({ key: 'view-all' })
+  await ui.press({ key: 'block-b2' })
+  await ui.press({ key: 'indent' })
+  // 光标在子块 b2 上，T 折到母块 b1，光标跟到 b1；b1 是顶层，再按就是开合它自己
+  await ui.press({ key: 'fold-up' })
+  expect(await has(/修 Hexo 部署/)).toBe(false)
+  await ui.press({ key: 'fold-up' })
+  expect(await has(/修 Hexo 部署/)).toBe(true)
+  await ui.unmount()
+})
+
+test('「需要我做」的每一条能单独改状态', async ($, on) => {
+  const clock = engine(on, [])
+  await play($, clock)
+  const ui = await $.ui.mount({ ...PANE, surface: 'vscode' })
+  const has = async (text: RegExp) => (await ui.find({ type: 'Text', text })) !== undefined
+  await ui.press({ key: 'view-me' })
+  expect(await has(/^Done$/)).toBe(true)
+  // 点两下这一条：Done → Todo（照 todoseq 的流转）
+  await ui.press({ key: 'block-b1#0' })
+  await ui.press({ key: 'block-b1#0' })
+  expect(await has(/^Todo$/)).toBe(true)
+  // 角标跟着这一条走
+  expect(await has(/^ 1$/)).toBe(true)
+  // 块本身的状态没动
+  await ui.press({ key: 'view-all' })
+  expect(await has(/^Done$/)).toBe(true)
+  await ui.unmount()
+})
+
+test('侧栏里改的状态，下一条消息带给 Claude', async ($, on) => {
+  const clock = engine(on, [])
+  await play($, clock)
+  const ui = await $.ui.mount({ ...PANE, surface: 'vscode' })
+  await ui.press({ key: 'view-me' })
+  // Done → Todo → Doing → Done：改回原样不用说
+  for (let i = 0; i < 4; i++) await ui.press({ key: 'block-b1#0' })
+  await $.prompt.submit({ text: '继续' } as never)
+  expect(contexts.at(-1)?.join('')).not.toContain('侧栏')
+  await ui.press({ key: 'block-b1#0' })
+  await $.prompt.submit({ text: '继续' } as never)
+  expect(contexts.at(-1)?.join('')).toContain('「确认第 4 档是什么」')
+  expect(contexts.at(-1)?.join('')).toContain('DONE → TODO')
+  // 说过一次就清掉
+  await $.prompt.submit({ text: '再继续' } as never)
+  expect(contexts.at(-1)).toEqual([])
+  await ui.unmount()
+})
+
+test('数字键对应的视图可以自定义', { options: { views: 'tech,all' } }, async ($, on) => {
+  const clock = engine(on, [])
+  await play($, clock)
+  const ui = await $.ui.mount({ ...PANE, surface: 'vscode' })
+  expect(await ui.find({ key: 'view-tech' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('--resume 后从存档恢复大纲（旧状态词换成新的）', async ($, on) => {
+  mock.clock(on)
+  mock.store(on, {
+    'session:sess-1': { blocks: [{ id: 'b1', turn: 1, ask: '', title: '上次聊的旧话题', status: 'CANCELED', did: [], conclusion: '', questions: [], needsMe: [], parent: null, isManual: false, isStatusManual: false, isPending: false, files: [], commands: 0 }] },
+  })
+  on('command.register', () => ({ value: { command: 'outline' } }) as never)
+  on('ui.open', () => ({ value: { isPlaced: true } }) as never)
+  on('session.id', () => ({ value: 'sess-1' }) as never)
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'vscode' })
+  await ui.press({ key: 'view-all' })
+  expect(await ui.find({ type: 'Text', text: /上次聊的旧话题/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^Cancelled$/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('终端里的树：Logseq 式按键，⌘/ 切状态', async ($, on) => {
+  const clock = engine(on, [])
+  await play($, clock)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  const has = async (text: RegExp) => (await ui.find({ type: 'Text', text, in: 'tree' })) !== undefined
+
+  await ui.press({ key: 'view-all' })
+  expect(await has(/给随机漫步加时间筛选/)).toBe(true)
+  // 不再有 Org 式的 [x] 记号
+  expect(await has(/\[x\]|\[ \]/)).toBe(false)
+
+  // 先 ⏎ 进入视图；选中 b2，⌥→ 缩进到 b1 下；光标回 b1，Ctrl+↑ 折叠
+  await ui.key({ key: 'return', in: 'tree' })
+  for (let i = 0; i < 2; i++) await ui.key({ key: 'down', in: 'tree' })
+  await ui.key({ key: 'right', meta: true, in: 'tree' })
+  for (let i = 0; i < 4; i++) await ui.key({ key: 'up', in: 'tree' })
+  await ui.key({ key: 'up', ctrl: true, in: 'tree' })
+  expect(await has(/修 Hexo 部署/)).toBe(false)
+  await ui.key({ key: 'down', ctrl: true, in: 'tree' })
+  expect(await has(/修 Hexo 部署/)).toBe(true)
+
+  // ⌥1 只看第 1 层，⌥2 展开到第 2 层（终端把 ⌥ 报成 meta，或者打出 ¡ ™）
+  await ui.key({ key: '1', meta: true, in: 'tree' })
+  expect(await has(/修 Hexo 部署/)).toBe(false)
+  await ui.key({ key: '™', in: 'tree' })
+  expect(await has(/修 Hexo 部署/)).toBe(true)
+  await ui.key({ key: '¡', in: 'tree' })
+  expect(await has(/修 Hexo 部署/)).toBe(false)
+  // E 展开光标所在块的子块，光标跟到子块上；T 再折回母块
+  await ui.key({ key: 'e', in: 'tree' })
+  expect(await has(/修 Hexo 部署/)).toBe(true)
+  await ui.key({ key: 't', in: 'tree' })
+  expect(await has(/修 Hexo 部署/)).toBe(false)
+  await ui.key({ key: 'e', in: 'tree' })
+
+  // ⌘/（终端报成 meta）：Done → Todo → Doing
+  await ui.key({ key: '/', meta: true, in: 'tree' })
+  expect(await has(/Todo/)).toBe(true)
+  await ui.key({ key: '/', ctrl: true, in: 'tree' })
+  expect(await has(/Doing/)).toBe(true)
+
+  // 数字键切视图：需要我做的
+  await ui.key({ key: '2', in: 'tree' })
+  expect(await has(/^确认第 4 档是什么$/)).toBe(true)
+  await ui.unmount()
+})
+
+test('视图栏和树分两层：数字选视图、⏎ 进入、⌫ 回视图栏', async ($, on) => {
+  const clock = engine(on, [])
+  await play($, clock)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  const has = async (text: RegExp) => (await ui.find({ type: 'Text', text, in: 'tree' })) !== undefined
+  // 一开始在视图栏：数字和 ←→ 换视图，⌘/ 这类树里的键碰不到块
+  await ui.key({ key: '4', in: 'tree' })
+  await ui.key({ key: 'left', in: 'tree' })
+  await ui.key({ key: 'right', in: 'tree' })
+  expect(await has(/给随机漫步加时间筛选/)).toBe(true)
+  await ui.key({ key: '/', meta: true, in: 'tree' })
+  expect(await has(/Todo/)).toBe(false)
+  // ⏎ 进入：光标落在这个视图的第一行，树里的键才生效
+  await ui.key({ key: 'return', in: 'tree' })
+  await ui.key({ key: '/', meta: true, in: 'tree' })
+  expect(await has(/Todo/)).toBe(true)
+  // 在树里直接按数字也能换视图
+  await ui.key({ key: '2', in: 'tree' })
+  expect(await has(/^确认第 4 档是什么$/)).toBe(true)
+  // ⌫ 回视图栏，树里的键又碰不到了
+  await ui.key({ key: 'backspace', in: 'tree' })
+  await ui.key({ key: '4', in: 'tree' })
+  await ui.key({ key: '/', meta: true, in: 'tree' })
+  expect(await has(/Doing/)).toBe(false)
+  await ui.unmount()
+})
+
+test('正文折叠：消息改成一行摘要，这一轮的工具行藏起来', async ($, on) => {
+  // 测试里没有真实的消息行，用一份带消息 id 的存档代替
+  const saved = (id: string, title: string, messageId: string, rowIds: string[]) => ({
+    id, kind: 'turn', turn: Number(id.slice(1)), ask: '', title, status: 'DONE', did: ['改了配置'], conclusion: '', questions: [], needsMe: [],
+    parent: null, isManual: false, isStatusManual: false, isPending: false, files: [], commands: 0, messageId, rowIds,
+  })
+  engine(on, [], { 'session:sess-1': { blocks: [saved('b1', '修 Hexo 部署', 'm1', ['tool-1']), saved('b2', '换主题', 'm2', [])] } })
+  on('ui.render', ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>{String((e.props as { text?: string }).text ?? 'engine')}</Text>
+  })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+
+  const pane = await $.ui.mount({ ...PANE, surface: 'vscode' })
+  await pane.press({ key: 'view-all' })
+  await pane.press({ key: 'block-b1' })
+  await pane.press({ key: 'body' })
+  await pane.unmount()
+
+  const prompt = (requestId: string) =>
+    $.ui.mount({ plugin: 'outline-sidebar', surface: 'terminal', component: 'UserMessage', requestId, props: { text: '原话', origin: { kind: 'composer' }, isExpanded: false } } as never)
+  const folded = await prompt('m1')
+  expect(await folded.find({ type: 'Text', text: /▸ Done  修 Hexo 部署/ })).toBeDefined()
+  await folded.unmount()
+  const other = await prompt('m2')
+  expect(await other.find({ type: 'Text', text: /原话/ })).toBeDefined()
+  await other.unmount()
+
+  const tool = await $.ui.mount({ plugin: 'outline-sidebar', surface: 'terminal', component: 'ToolUse', requestId: 'tool-1', props: { isExpanded: false } } as never)
+  expect(await tool.find({ type: 'Text', text: /engine/ })).toBeUndefined()
+  await tool.unmount()
+})
+
+test('Agenda：汇总所有会话里需要我做的事', async ($, on) => {
+  const clock = engine(on, [], {
+    'session:old': { cwd: '/Users/me/blog', savedAt: 1, blocks: [{ id: 'b1', kind: 'turn', turn: 1, ask: '', title: '换博客主题', status: 'NEEDOK', did: [], conclusion: '', questions: [], needsMe: ['挑一个配色'], parent: null, isManual: false, isStatusManual: false, isPending: false, files: [], commands: 0 }] },
+  })
+  await play($, clock)
+  await $.command.run({ command: 'agenda', args: '' } as never)
+  const ui = await $.ui.mount({ ...PANE, requestId: 'agenda', props: { ...PANE.props, title: 'Agenda' }, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: /换博客主题/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /挑一个配色/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /NeedOK\?/ })).toBeDefined()
+  await ui.press({ key: 'ag-old-b1' })
+  expect(await ui.find({ type: 'Text', text: /换博客主题/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('回顾：接住 Claude Code 自带的 recap，也能按 r 生成大纲回顾', async ($, on) => {
+  const clock = engine(on, [])
+  await play($, clock)
+
+  await $.session.append({ door: 'notice', origin: { kind: 'engine' }, message: { type: 'system', name: 'away_summary', content: [{ type: 'text', text: '做完了三件事，下一步等你确认。 (disable recaps in /config)' }] } } as never)
+  await clock.settle()
+  const ui = await $.ui.mount({ ...PANE, surface: 'vscode' })
+  const has = async (text: RegExp) => (await ui.find({ type: 'Text', text })) !== undefined
+  expect(await has(/^Claude Code/)).toBe(true)
+  expect(await has(/做完了三件事，下一步等你确认。$/)).toBe(true)
+
+  await ui.press({ key: 'recap' })
+  expect(await has(/^大纲/)).toBe(true)
+  expect(await has(/第 4 档定为 3 个月/)).toBe(true)
+
+  // 回顾也进了大纲，结论视图里能看到
+  await ui.press({ key: 'view-conclusions' })
+  expect(await has(/\[回顾\]/)).toBe(true)
+  await ui.unmount()
+})
+
+test('进行中的一轮：实时步数，按 p 刷新出小结，结束后转成普通块', async ($, on) => {
+  const clock = engine(on, [])
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.turn.start({ text: '博客部署挂了，帮我看看', turnId: 't1' })
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'vscode' })
+  const has = async (text: RegExp) => (await ui.find({ type: 'Text', text })) !== undefined
+  await ui.press({ key: 'view-all' })
+  expect(await has(/博客部署挂了，帮我看看/)).toBe(true)
+  expect(await has(/^Doing$/)).toBe(true)
+
+  await $.tool.call({ tool: 'Read', file_path: '/blog/_config.yml' } as never)
+  await $.tool.call({ tool: 'Edit', file_path: '/blog/_config.yml', old_string: 'a', new_string: 'b' } as never)
+  await clock.advance(1500)
+  expect(await has(/^2$/)).toBe(true)
+  expect(await has(/^改 _config.yml$/)).toBe(true)
+
+  // 一轮还没结束，手动刷新
+  await ui.press({ key: 'progress' })
+  expect(await has(/^正在改配置/)).toBe(true)
+  expect(await has(/^找到了出错的目录$/)).toBe(true)
+
+  await $.turn.complete({ answer: '修好了', durationMs: 5000, isAborted: false, turnId: 't1', reason: 'answer', usage: { ...USAGE, model: 'claude-opus-5-5' } })
+  await clock.settle()
+  expect(await has(/^正在改配置/)).toBe(false)
+  expect(await has(/给随机漫步加时间筛选/)).toBe(true) // 第一条正式总结
+  await ui.unmount()
+})
+
+test('中文输入法下也能用：回车弹菜单改状态，空格展开详情', async ($, on) => {
+  const clock = engine(on, [])
+  await play($, clock)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  const has = async (text: RegExp) => (await ui.find({ type: 'Text', text, in: 'tree' })) !== undefined
+  await ui.press({ key: 'view-all' })
+
+  // 选中第一块，空格展开详情
+  await ui.key({ key: 'down', in: 'tree' })
+  expect(await has(/默认全部/)).toBe(false)
+  await ui.key({ key: ' ', in: 'tree' })
+  expect(await has(/默认全部/)).toBe(true)
+
+  // 回车弹菜单，往下选到 Failed，回车
+  await ui.key({ key: 'return', in: 'tree' })
+  expect(await has(/^详情$/)).toBe(true)
+  for (let i = 0; i < 14; i++) await ui.key({ key: 'down', in: 'tree' })
+  await ui.key({ key: 'return', in: 'tree' })
+  expect(await has(/^详情$/)).toBe(false)
+  expect(await has(/Failed/)).toBe(true)
+  await ui.unmount()
+})
+
+test('按格子宽度折行：中文随处可断，英文单词不拆', async () => {
+  // 一长串中文不会整段挪到下一行，每行都尽量占满
+  expect(wrapCells('确认 J、K 上下移动仍可用，仅删除了工具栏按钮', 20)).toEqual(['确认 J、K 上下移动仍', '可用，仅删除了工具栏', '按钮'])
+  // 英文单词整个挪到下一行
+  expect(wrapCells('运行 /reload-plugins 使改动生效', 16)).toEqual(['运行', '/reload-plugins', '使改动生效'])
+  expect(wrapCells('短', 20)).toEqual(['短'])
+})

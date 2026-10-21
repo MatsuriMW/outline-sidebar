@@ -1,0 +1,12 @@
+{
+  "name": "outline-sidebar-local",
+  "owner": {
+    "name": "chenchen"
+  },
+  "plugins": [
+    {
+      "name": "outline-sidebar",
+      "source": "./"
+    }
+  ]
+}
