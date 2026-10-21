@@ -793,3 +793,36 @@ test('自动折叠：整棵都了结的块，光标离开 3 秒后折起来；�
   expect(await has(/^子块$/)).toBe(true)
   await ui.unmount()
 })
+
+test('窗口按行截、滚轮按行翻：底下不空一截，↑ ↓ 数的是行；滚过以后光标一动再拉回来', async ($, on) => {
+  const reply = (n: number) => ({ title: `第 ${n} 件事`, status: 'DOING', did: [], conclusion: '', questions: [], needsMe: [], parent: null, resolved: [] })
+  const clock = engine(on, [], {}, Array.from({ length: 12 }, (_, i) => reply(i + 1)))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  for (let i = 1; i <= 12; i++) {
+    await $.turn.start({ text: '做点事', turnId: `t${i}` })
+    await $.turn.complete({ answer: '好了', durationMs: 1000, isAborted: false, turnId: `t${i}`, reason: 'answer', usage: { ...USAGE, model: 'claude-opus-5-5' } })
+    await clock.settle()
+  }
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: { ...PANE.props, scroll: { offset: 0, bodyRows: 18 } } })
+  const text = async (pattern: RegExp) => (await ui.find({ type: 'Text', text: pattern, in: 'tree' }))?.text
+  await ui.press({ key: 'view-all' })
+  await ui.key({ key: 'up', in: 'tree' })
+  for (let i = 0; i < 12; i++) await ui.key({ key: 'up', in: 'tree' })
+  // 光标在第 1 件事上，窗口从头开始；底下还有几行，数的是行不是块
+  expect(await text(/↑/)).toBeUndefined()
+  const below = Number((await text(/↓ \d+ 行/))?.match(/\d+/)?.[0])
+  expect(below).toBeGreaterThan(12)
+
+  // 人滚一格滚轮：往下翻 3 行
+  const wheel = (by: number) =>
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ($ as any).ui.scroll({ component: 'Pane', requestId: 'outline', offset: 0, by, bodyRows: 18, contentRows: 18, origin: { kind: 'person' }, pointer: { column: 1, row: 5 } })
+  await wheel(1)
+  expect(await text(/↑ \d+ 行/)).toContain('↑ 3 行')
+  await wheel(2)
+  expect(await text(/↑ \d+ 行/)).toContain('↑ 9 行')
+  // 光标一动，窗口拉回光标所在的块
+  await ui.key({ key: 'down', in: 'tree' })
+  expect(await text(/↑/)).toBeUndefined()
+  await ui.unmount()
+})

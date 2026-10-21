@@ -57,6 +57,7 @@ const blocks = atom({ plugin: 'outline-sidebar', key: 'blocks' } as const, [])
 const folded = atom({ plugin: 'outline-sidebar', key: 'folded' } as const, [])
 const unfolded = atom({ plugin: 'outline-sidebar', key: 'unfolded' } as const, [])
 const lingering = atom({ plugin: 'outline-sidebar', key: 'lingering' } as const, {})
+const wheel = atom({ plugin: 'outline-sidebar', key: 'wheel' } as const, 0)
 const open = atom({ plugin: 'outline-sidebar', key: 'open' } as const, [])
 const view = atom({ plugin: 'outline-sidebar', key: 'view' } as const, 'all')
 const level = atom({ plugin: 'outline-sidebar', key: 'level' } as const, 'contents')
@@ -1459,6 +1460,14 @@ export const register: Register = (on, options) => {
     return result
   })
 
+  // 滚轮：大纲树是自己画的，收不到滚轮；人在面板上滚的格数累加起来交给树自己翻，引擎的窗口不动。
+  // 键盘翻页（没有指针位置的）照旧交给引擎
+  on('ui.scroll', { requestId: PANE }, async ($, e, next) => {
+    if (e.origin.kind !== 'person' || e.pointer === undefined) return next(e)
+    await update($, wheel, n => (n ?? 0) + e.by)
+    return {}
+  })
+
   // 树视图里的按键和点击
   on('ui.message', { requestId: PANE }, async ($, e, next) => {
     const data = e.data as { type?: string; id?: string; key?: string; shift?: boolean; ctrl?: boolean; meta?: boolean }
@@ -1669,6 +1678,7 @@ export const register: Register = (on, options) => {
               rows: toTreeRows(rows, v, openIds, at, now),
               height,
               scope: isTabs ? 'tabs' : 'tree',
+              wheel: await read($, wheel),
               menu: menuFor(await read($, level), zoomId !== null, isBodyAll),
               itemMenu: itemMenu(),
               ...(empty === undefined ? {} : { empty }),

@@ -143,6 +143,8 @@ declare module 'claude-code' {
       unfolded: string[]
       /** 光标刚离开的块（连同祖先）先别自动折，到这个时间为止 */
       lingering: Record<string, number>
+      /** 滚轮在面板上滚过的格数，累加；交给大纲树自己翻 */
+      wheel: number
       /** 展开了详情字段的块 */
       open: string[]
       view: View

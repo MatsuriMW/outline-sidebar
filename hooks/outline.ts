@@ -495,6 +495,8 @@ export type TreeProps = {
   itemMenu: MenuItem[]
   /** tabs：键盘在视图栏上，←→ 和数字选视图、⏎ 进入；tree：光标只在这个视图的行里走 */
   scope?: 'tabs' | 'tree'
+  /** 滚轮在面板上滚过的格数，一直累加；树看它和上次差多少，就往下（正）或往上（负）翻几行 */
+  wheel?: number
 }
 
 export const toTreeRows = (rows: readonly Row[], v: View, open: readonly string[], cursor: string | null, now = 0): TreeRow[] =>
