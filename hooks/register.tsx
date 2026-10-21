@@ -1563,18 +1563,19 @@ export const register: Register = (on, options) => {
 
   // ---------- 大纲面板 ----------
 
-  // 终端：大纲树是自绘区域（Client）。单独一个钩子，在最外层一次从 $.ui.resolve(e) 取出 Client，目录才认得出这里加载的是 ./tree-view.tsx；
-  // 上面那一截（视图栏、工具栏、回顾……）照旧由下面的钩子画。同一个模块里先注册的钩子在外层
+  // 终端：大纲树是自绘区域（Client），单独一个钩子画；上面那一截（视图栏、工具栏、回顾……）照旧由下面的钩子画。
+  // 同一个模块里先注册的钩子在外层
   on('ui.render', { component: 'Pane', requestId: PANE, surface: 'terminal' }, async ($, e, next) => {
-    const { Box, Client } = $.ui.resolve(e)
+    const els = $.ui.resolve(e)
+    const { Box } = els
     paneTree = undefined
     const header = await next(e)
     if (paneTree === undefined) return header
     return (
       <Box flexDirection="column" width={e.props.bodyColumns}>
         {header}
-        {/* 直接调用 Client({ module, ... })，不写成 <Client /> 标签：目录的扫描只认这种写法 */}
-        {Client({ module: './tree-view.tsx', key: TREE, props: paneTree, width: e.props.bodyColumns })}
+        {/* 从元素表上直接调用，不把 Client 取成一个变量：目录的扫描把声明出来的 Client 当成认不出的元素 */}
+        {els.Client({ module: './tree-view.tsx', key: TREE, props: paneTree, width: e.props.bodyColumns })}
       </Box>
     )
   })
