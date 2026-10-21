@@ -162,9 +162,9 @@ export const applyResolutions = (b: Block, found: readonly Resolution[], turn: n
     }
   }
   if (!isChanged) return b
-  const next: Block = { ...b, needsMeStatus: marks, needsMeAuto: auto }
-  const isAllSettled = b.needsMe.every((_, i) => !isOpenStatus(itemStatus(next, i)))
-  return isAllSettled && !b.isStatusManual && isForMe(b.status) && b.status !== 'TOREVIEW' ? { ...next, status: 'DONE', resolvedIn: turn, statusAt: now } : next
+  const updated: Block = { ...b, needsMeStatus: marks, needsMeAuto: auto }
+  const isAllSettled = b.needsMe.every((_, i) => !isOpenStatus(itemStatus(updated, i)))
+  return isAllSettled && !b.isStatusManual && isForMe(b.status) && b.status !== 'TOREVIEW' ? { ...updated, status: 'DONE', resolvedIn: turn, statusAt: now } : updated
 }
 
 /** 「需要我做」第 i 条的状态：单独改过就用改过的，没改过就跟着块走 */

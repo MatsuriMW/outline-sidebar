@@ -290,7 +290,7 @@ async function refreshBody($: EngineInterface) {
   const toggled = await read($, bodyFolded)
   const turns = list.filter(b => b.kind === 'turn')
   const last = turns.at(-1)?.id
-  const next: Body = { labels: {}, hide: [] }
+  const computed: Body = { labels: {}, hide: [] }
   for (const b of turns) {
     if (b.messageId === undefined || b.isPending) continue
     // 全折模式下，最新一轮默认不折，toggled 里的是例外
@@ -298,10 +298,10 @@ async function refreshBody($: EngineInterface) {
     if (!isFolded) continue
     const open = b.needsMe.filter((_, i) => isOpenStatus(itemStatus(b, i)))
     const waiting = open.length > 0 ? `  需要我做：${open.join('；')}` : ''
-    next.labels[b.messageId] = `▸ ${STATUS_INFO[b.status].label}  ${b.title}${waiting}`
-    next.hide.push(...(b.rowIds ?? []))
+    computed.labels[b.messageId] = `▸ ${STATUS_INFO[b.status].label}  ${b.title}${waiting}`
+    computed.hide.push(...(b.rowIds ?? []))
   }
-  await update($, body, () => next)
+  await update($, body, () => computed)
 }
 
 async function toggleBodyFold($: EngineInterface) {
@@ -315,7 +315,7 @@ async function toggleBodyFold($: EngineInterface) {
 }
 
 async function toggleBodyFoldAll($: EngineInterface) {
-  await update($, bodyFoldAll, on => !on)
+  await update($, bodyFoldAll, isOn => !isOn)
   await update($, bodyFolded, () => [])
   await refreshBody($)
   $.ui.toast((await read($, bodyFoldAll)) ? '正文全折：除了最新一轮，每轮只留一行摘要' : '正文全部展开')
@@ -551,8 +551,8 @@ async function moveCursor($: EngineInterface, step: number) {
   if (rows.length === 0) return
   const id = await read($, cursor)
   const at = rows.findIndex(r => r.key === id)
-  const next = at < 0 ? (step > 0 ? 0 : rows.length - 1) : Math.min(rows.length - 1, Math.max(0, at + step))
-  await setCursor($, rows[next]!.key)
+  const target = at < 0 ? (step > 0 ? 0 : rows.length - 1) : Math.min(rows.length - 1, Math.max(0, at + step))
+  await setCursor($, rows[target]!.key)
 }
 
 /** 换了视图，光标要是不在这个视图的行里，就放到第一行 */
@@ -777,10 +777,10 @@ async function changeStatus($: EngineInterface, pick: (current: Status) => Statu
       else if (isAnswer(marks[index]!)) told = true
       // 我手动改过的，「自动」记号清掉
       const auto = b.needsMe.map((_, i) => (i === index ? null : (b.needsMeAuto?.[i] ?? null)))
-      const next = { ...b, needsMeStatus: marks, needsMeAuto: auto }
+      const updated = { ...b, needsMeStatus: marks, needsMeAuto: auto }
       // 最后一条也了结了，在等我的块跟着 Done；待验收的块还得我验收，不跟着变
-      const isAllSettled = b.needsMe.every((_, i) => !isOpenStatus(itemStatus(next, i)))
-      return isAllSettled && isForMe(b.status) && b.status !== 'TOREVIEW' ? { ...next, status: 'DONE' as const, statusAt: now } : next
+      const isAllSettled = b.needsMe.every((_, i) => !isOpenStatus(itemStatus(updated, i)))
+      return isAllSettled && isForMe(b.status) && b.status !== 'TOREVIEW' ? { ...updated, status: 'DONE' as const, statusAt: now } : updated
     }),
   )
   if (change !== undefined) await noteChange($, change)
@@ -889,7 +889,7 @@ async function setStatus($: EngineInterface, status: Status) {
 }
 
 async function toggleLegend($: EngineInterface) {
-  await update($, legend, on => !on)
+  await update($, legend, isOn => !isOn)
 }
 
 /** 回车弹出的菜单：只用方向键和回车就能做完所有操作 */
@@ -916,14 +916,14 @@ const itemMenu = (): MenuItem[] => statusMenu()
 /** 层级按钮（O）：只看顶层 → 全部标题 → 全部展开（连详情）→ 去掉 Done（不折、不展开详情，Done 的块藏起来） */
 async function cycleLevel($: EngineInterface) {
   const all = await read($, blocks)
-  const next = LEVELS[(LEVELS.indexOf(await read($, level)) + 1) % LEVELS.length]!
-  await update($, level, () => next)
-  await update($, folded, () => (next === 'overview' ? all.filter(b => childrenOf(all, b.id).length > 0).map(b => b.id) : []))
-  await update($, open, () => (next === 'all' ? all.map(b => b.id) : []))
+  const nextLevel = LEVELS[(LEVELS.indexOf(await read($, level)) + 1) % LEVELS.length]!
+  await update($, level, () => nextLevel)
+  await update($, folded, () => (nextLevel === 'overview' ? all.filter(b => childrenOf(all, b.id).length > 0).map(b => b.id) : []))
+  await update($, open, () => (nextLevel === 'all' ? all.map(b => b.id) : []))
   // 「全部展开」照办，别的档位交还给自动折叠
-  await update($, unfolded, () => (next === 'all' ? all.map(b => b.id) : []))
+  await update($, unfolded, () => (nextLevel === 'all' ? all.map(b => b.id) : []))
   await keepCursorVisible($)
-  $.ui.toast(LEVEL_LABEL[next])
+  $.ui.toast(LEVEL_LABEL[nextLevel])
 }
 
 /** 折起来以后光标要是被藏住了，挪到看得见的那个祖先块上 */
@@ -1672,8 +1672,9 @@ export const register: Register = (on, options) => {
     const empty = list.length === 0 ? `${PH.empty} 聊一轮，这里就会长出第一块` : rows.length === 0 ? '∅' : undefined
 
     // 终端里用树视图接 Logseq 式按键（中文输入法下也能用）；别的界面退回成按钮
-    const Client = e.surface === 'terminal' && 'Client' in els ? els.Client : undefined
-    if (Client !== undefined) {
+    if (e.surface === 'terminal' && 'Client' in els) {
+      // 和 Box、Text 一样直接从元素表里取，目录才认得出这里加载的是 ./tree-view.tsx
+      const { Client } = els
       const viewLabels = keys.map((one, i) => `${i + 1}: ${VIEW_INFO[one].label}${one === 'me' && waiting > 0 ? ` ${waiting}` : ''}`)
       const actionLabels = ACTIONS.map(a => `${a.hotkey}: ${a.label}`)
       const headerRows =

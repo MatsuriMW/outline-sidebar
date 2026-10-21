@@ -1,7 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
-import { wrapCells } from './outline'
+import { wrapCells } from '../hooks/outline'
 
 const PANE = {
   plugin: 'outline-sidebar',

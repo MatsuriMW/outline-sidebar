@@ -271,7 +271,24 @@ AI 时代，最珍贵的是人类完整的、不被切分的注意力（undivide
 - **读的东西**：这个会话里的工具调用（文件名、命令和成没成、输出的最后一行），用来给「做了」挂证据；不读文件内容。
 - **存的东西**：每个会话的大纲存在 Claude Code 给插件的本地存储里（`~/.claude/plugins/store/`），最多留 100 个会话，`/agenda` 和跨会话的指标读的就是这些。
 - **写的东西**：只有 `/outline export` 会写文件，写到你给的路径；按 `X` 是复制到剪贴板。
-- **不做的事**：不自己联网，不上报任何数据，不改 Claude Code 的权限设置。
+- **运行的程序**：只有三个，命令都写在 `hooks/register.tsx` 里：`<插件目录>/bin/ascii-input [输入源 ID]`（切输入法）、`/bin/mkdir -p <插件目录>/bin` 和 `/usr/bin/swiftc -O <插件目录>/tools/ascii-input.swift -o <插件目录>/bin/ascii-input`（第一次用时编译它）。
+- **不做的事**：不自己联网，不上报任何数据，不读任何凭证或 API key，不改 Claude Code 的权限设置，不替你执行斜杠命令，不自己调用工具。代码里出现的「token」都是指模型用量的 token 数；`www.w3.org` 是桌面版 SVG 图标的命名空间，不发请求。
+
+### 挂了哪些钩子
+
+| 钩子 | 做什么 |
+|---|---|
+| `session.start` | 注册 `/outline`、`/agenda` 两个命令，从本地存档恢复这个会话的大纲，打开侧栏 |
+| `command.run`（`outline`、`agenda`） | 回答这两个命令：打开面板、导出大纲、汇总待办 |
+| `command.run`（`btw`） | `/btw` 照常执行，答完以后在大纲里记一块；不改命令本身 |
+| `turn.start`、`turn.complete` | 一轮开始时建一个「进行中」的块，结束时记用量并调 Haiku 总结 |
+| `tool.call` | 记下这一轮改了哪些文件、跑了哪些命令和成没成，给「做了」挂证据；工具调用照常放行，不拦、不改 |
+| `prompt.submit` | 你发消息时，把侧栏里改过的状态作为附加上下文带给 Claude；消息正文不改 |
+| `prompt.edit` | 从侧栏回到对话框时，第一个键用来把输入法切回去 |
+| `session.append` | 记下每一轮对应的消息 id（给「跳转」和「正文折叠」用）和 Claude 这一轮写出的文字（给总结和进度用），接住 Claude Code 自带的回顾显示在侧栏顶上；对话记录本身不改 |
+| `ui.render`（`UserMessage`、`AssistantMessage`、`ToolUse`、`ToolResult`） | 正文折叠：把折起来的那一轮画成一行摘要；没折叠的照原样画 |
+| `ui.render`（`Pane`）、`ui.message`、`ui.scroll` | 画侧栏和 Agenda 面板，接收大纲树里的按键、点击和滚轮 |
+
 
 **In English.** After each turn the mod asks Haiku, through your own Claude Code session, to summarize it (your prompt up to 2,000 characters, Claude's answer up to 4,000, edited file names, commands with their last output line, subtask conclusions and the outline's titles); `P` and `R` make one call each. After a review verdict or a Y / N answer it submits a message to Claude in the session, and attaches your sidebar status changes to your next message. On macOS it compiles `tools/ascii-input.swift` with `swiftc` on first use and runs it to switch the input source when you click into the sidebar and back. It reads the session's tool calls (file names, commands, last output line), never file contents. It stores each session's outline in Claude Code's local plugin store, up to 100 sessions, and writes a file only on `/outline export`. It makes no network requests of its own and sends no telemetry.
 
