@@ -96,7 +96,7 @@ const LEGEND_FIELDS = ['needsMe', 'did', 'files', 'conclusion', 'question', 'res
 
 /** 图例占几行（终端），用来算树视图还剩多少高度 */
 const legendRows = (width: number) =>
-  estimateWrappedRows(STATUSES.map(st => statusText(st, 0, false)), width) + estimateWrappedRows(LEGEND_FIELDS.map(f => `${glyph(f)} ${FIELD[f].label}`), width)
+  estimateWrappedRows(STATUSES.map(st => statusText(st)), width) + estimateWrappedRows(LEGEND_FIELDS.map(f => `${glyph(f)} ${FIELD[f].label}`), width)
 
 // ---------- 桌面版的图标：SVG ----------
 
@@ -458,6 +458,9 @@ async function enterView($: EngineInterface) {
 /** 点树之前用的输入法；回对话框敲第一个键时切回去 */
 let restoreInput: string | undefined
 
+/** 面板上一次画的时候有没有键盘，用来只在刚拿到键盘那一下切输入法 */
+let isPaneFocused = false
+
 /**
  * 点进大纲树时切到英文键盘：中文输入法开着，J/K、T 这些字母会被拿去组字。
  * 用 tools/ascii-input.swift（第一次用时编译到 bin/），只在 macOS 上，失败了也不打扰
@@ -487,10 +490,9 @@ async function asciiInput($: EngineInterface) {
 async function pick($: EngineInterface, key: string) {
   await update($, scope, () => 'tree')
   const { blockId, index } = parseKey(key)
-  // 点「需要我做」的一条：第二下切它的状态；点块：第二下展开详情
+  // 点块：第二下展开详情。点只挪光标，不改状态，改状态用 S
   if ((await read($, cursor)) === key) {
     if (index === undefined) await update($, open, ids => toggle(ids, blockId))
-    else await cycleStatus($)
   } else await update($, cursor, () => key)
 }
 
@@ -634,7 +636,7 @@ async function toggleLegend($: EngineInterface) {
 }
 
 /** 回车弹出的菜单：只用方向键和回车就能做完所有操作 */
-const statusMenu = (): MenuItem[] => STATUSES.map(st => ({ id: `status:${st}`, label: statusText(st, 0, false), color: STATUS_INFO[st].color }))
+const statusMenu = (): MenuItem[] => STATUSES.map(st => ({ id: `status:${st}`, label: statusText(st), color: STATUS_INFO[st].color }))
 
 const menuFor = (lvl: Level, isZoomed: boolean, isBodyAll: boolean): MenuItem[] => [
   { id: 'detail', label: '详情' },
@@ -1201,6 +1203,7 @@ export const register: Register = (on, options) => {
       void asciiInput($)
       await pick($, data.id)
     }
+    else if (data.type === 'focus') void asciiInput($)
     else if (data.type === 'action' && typeof (data as { action?: unknown }).action === 'string') {
       const action = (data as { action: string }).action
       if (action === 'view-prev' || action === 'view-next') await stepView($, keys, action === 'view-prev' ? -1 : 1)
@@ -1244,6 +1247,11 @@ export const register: Register = (on, options) => {
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const els = $.ui.resolve(e)
     const { Box, Text, Button } = els
+    // 面板拿到键盘（点了视图栏、工具栏，或 Tab 进来）也切英文：按钮的字母快捷键一样会被输入法拿去组字
+    if (e.surface === 'terminal') {
+      if (e.props.isFocused && !isPaneFocused) void asciiInput($)
+      isPaneFocused = e.props.isFocused
+    }
     const list = await read($, blocks)
     const v = await read($, view)
     const foldedIds = await read($, folded)
@@ -1269,7 +1277,7 @@ export const register: Register = (on, options) => {
       desk === undefined ? <Text color={color}>{PH[icon]}</Text> : <desk.Svg source={phosphorIconSvg(icon, color)} alt={icon} width={ICON_PX} height={ICON_PX} />
     const drawStatus = (st: Status, isContext = false, changedAt?: number) =>
       desk === undefined ? (
-        <Text color={STATUS_INFO[st].color} bold={isOpenStatus(st)} dimColor={isContext}>{statusText(st, 0, false)}</Text>
+        <Text color={STATUS_INFO[st].color} bold={isOpenStatus(st)} dimColor={isContext}>{statusText(st)}</Text>
       ) : (
         desktopStatus(desk, st, changedAt !== undefined && now - changedAt < FIRE_MS, isContext)
       )
@@ -1413,7 +1421,8 @@ export const register: Register = (on, options) => {
                 <Button key={`block-${row.key}`} plain onPress={() => pick($, row.key)}>
                   <Text inverse={isAt}>{ITEM_MARK}</Text>
                 </Button>
-                {drawStatus(st)}
+                {/* 状态和标题之间固定两格：列间距一格，再补一格 */}
+                <Box marginRight={1}>{drawStatus(st)}</Box>
                 <Box flexShrink={1}>
                   <Text dimColor={!isOpenStatus(st)} strikethrough={st === 'CANCELLED'} bold={isAt}>{row.item.text}</Text>
                 </Box>
@@ -1431,7 +1440,7 @@ export const register: Register = (on, options) => {
                 <Button key={`block-${row.key}`} plain onPress={() => pick($, row.key)}>
                   <Text inverse={isAt}>{arrow}</Text>
                 </Button>
-                {b.isPending ? <Text dimColor>…</Text> : drawStatus(b.status, row.isContext, b.statusAt)}
+                <Box marginRight={1}>{b.isPending ? <Text dimColor>…</Text> : drawStatus(b.status, row.isContext, b.statusAt)}</Box>
                 {badge !== undefined && <Text color={badge.color}>[{badge.text}]</Text>}
                 <Box flexShrink={1}>
                   <Text dimColor={row.isContext || (!isOpenRow && b.live === undefined)} strikethrough={b.status === 'CANCELLED'} bold={isAt || (isOpenRow && !row.isContext)} color={badge?.color}>
@@ -1455,7 +1464,7 @@ export const register: Register = (on, options) => {
     const desk = e.surface !== 'terminal' && 'Svg' in els ? (els as unknown as DesktopEls) : undefined
     const groups = await read($, agenda)
     const drawStatus = (st: Status) =>
-      desk === undefined ? <Text color={STATUS_INFO[st].color} bold>{statusText(st, 0, false)}</Text> : desktopStatus(desk, st, false)
+      desk === undefined ? <Text color={STATUS_INFO[st].color} bold>{statusText(st)}</Text> : desktopStatus(desk, st, false)
     return (
       <Box flexDirection="column" width={e.props.bodyColumns}>
         <Box columnGap={1}>
@@ -1469,10 +1478,10 @@ export const register: Register = (on, options) => {
               <Box key={`item-${g.sid}-${item.blockId}`} flexDirection="column" paddingLeft={2}>
                 <Box flexDirection="row" columnGap={1}>
                   <Button key={`ag-${g.sid}-${item.blockId}`} plain onPress={() => markAgendaDone($, g.sid, item.blockId)}>
-                    {desk === undefined ? <Text color={STATUS_INFO[item.status].color} bold>{statusText(item.status, 0, false)}</Text> : STATUS_INFO[item.status].label}
+                    {desk === undefined ? <Text color={STATUS_INFO[item.status].color} bold>{statusText(item.status)}</Text> : STATUS_INFO[item.status].label}
                   </Button>
                   {desk !== undefined && drawStatus(item.status)}
-                  <Box flexShrink={1}>
+                  <Box flexShrink={1} marginLeft={1}>
                     <Text>{item.title}</Text>
                   </Box>
                 </Box>

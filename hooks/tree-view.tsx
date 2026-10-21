@@ -1,7 +1,7 @@
 import type { ClientModule } from 'claude-code'
 
 import { SPIN } from './icons'
-import { cellWidth, wrapCells } from './outline'
+import { STATUS_GAP, cellWidth, wrapCells } from './outline'
 import type { TreeLine, TreeProps, TreeRow } from './outline'
 
 const linesFor = (text: string, room: number) => wrapCells(text, room).length
@@ -13,7 +13,7 @@ const lineHeight = (line: TreeLine, room: number) => linesFor(line.text, lineRoo
 
 /** 标题前面那一截（树枝、箭头、状态、角标）占几格 */
 const headWidth = (row: TreeRow) =>
-  cellWidth(row.prefix) + cellWidth(row.arrow) + 1 + cellWidth(row.status) + 1 + (row.badge === undefined ? 0 : cellWidth(row.badge.text) + 3)
+  cellWidth(row.prefix) + cellWidth(row.arrow) + 1 + cellWidth(row.status) + STATUS_GAP.length + (row.badge === undefined ? 0 : cellWidth(row.badge.text) + 3)
 
 /** 估算一行占几行（不含菜单），用来把点击的行号换回是哪一行，以及让光标所在行始终在可见范围里 */
 const bodyHeight = (row: TreeRow, columns: number) => {
@@ -137,6 +137,8 @@ const TreeView: ClientModule<TreeProps, State> = (props, surface) => {
       }
       y -= heights[i] ?? 1
     }
+    // 没点中哪一行（空白处、「↑ n」、空视图），树也拿到了键盘：照样切英文
+    surface.post({ type: 'focus' })
   })
 
   const shown = rows.slice(top, end)
@@ -153,7 +155,7 @@ const TreeView: ClientModule<TreeProps, State> = (props, surface) => {
               <Text inverse={row.isAt && scope === 'tree'}>{row.arrow}</Text>
               <Text> </Text>
               <Text color={row.statusColor} bold={row.isOpen} dimColor={row.isContext}>{row.isSpinning ? spun(row.status, frame) : row.status}</Text>
-              <Text> </Text>
+              <Text>{STATUS_GAP}</Text>
               {row.badge !== undefined && <Text color={row.badge.color}>[{row.badge.text}] </Text>}
             </Box>
             <Box flexDirection="column">

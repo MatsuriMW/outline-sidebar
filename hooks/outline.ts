@@ -3,7 +3,7 @@ import { PH } from './icons'
 import type { PhosphorIcon } from './icons'
 import { STATUS_INFO, isForMe, isOpenStatus, statusText } from './status'
 
-export { STATUSES, STATUS_INFO, isForMe, isOpenStatus, nextStatus, normalizeStatus, statusText } from './status'
+export { STATUSES, STATUS_GAP, STATUS_INFO, isForMe, isOpenStatus, nextStatus, normalizeStatus, statusText } from './status'
 
 export const VIEW_INFO: Record<View, { label: string; aliases: string[] }> = {
   conclusions: { label: '结论', aliases: ['concl', 'conclusion'] },
@@ -397,7 +397,7 @@ export const toTreeRows = (rows: readonly Row[], v: View, open: readonly string[
       isCanceled: st === 'CANCELLED',
     }
     if (row.item !== undefined) {
-      return { ...common, isItem: true, arrow: ITEM_MARK, status: statusText(st, 0, false), title: row.item.text, isContext: false, lines: [] }
+      return { ...common, isItem: true, arrow: ITEM_MARK, status: statusText(st), title: row.item.text, isContext: false, lines: [] }
     }
     const badge = KIND_BADGE[b.kind]
     const lines = row.isContext ? [] : blockLines(b, v, open.includes(b.id), now)

@@ -53,13 +53,14 @@ export const isOpenStatus = (st: Status) => STATUS_INFO[st].group !== 'completed
 
 export const isForMe = (st: Status) => STATUS_INFO[st].isForMe === true
 
-const LABEL_WIDTH = Math.max(...STATUSES.map(st => STATUS_INFO[st].label.length))
+/** 状态和后面的字之间固定空两格，不按最长的状态词补齐 */
+export const STATUS_GAP = '  '
 
-/** 终端里的状态：Lucide 字 + 首字母大写的词，补齐宽度让标题对齐；Doing 的图标按 frame 转 */
-export const statusText = (st: Status, frame = 0, isPadded = true) => {
+/** 终端里的状态：Lucide 字 + 首字母大写的词；Doing 的图标按 frame 转 */
+export const statusText = (st: Status, frame = 0) => {
   const info = STATUS_INFO[st]
   const glyph = st === 'DOING' ? (SPIN[frame % SPIN.length] ?? LU.doing) : LU[info.icon]
-  return `${glyph} ${isPadded ? info.label.padEnd(LABEL_WIDTH) : info.label}`
+  return `${glyph} ${info.label}`
 }
 
 /** 旧版本存下的状态换成现在的写法 */

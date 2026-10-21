@@ -156,9 +156,12 @@ test('「需要我做」的每一条能单独改状态', async ($, on) => {
   const has = async (text: RegExp) => (await ui.find({ type: 'Text', text })) !== undefined
   await ui.press({ key: 'view-me' })
   expect(await has(/^Done$/)).toBe(true)
-  // 点两下这一条：Done → Todo（照 todoseq 的流转）
+  // 点只挪光标，点几下状态都不变
   await ui.press({ key: 'block-b1#0' })
   await ui.press({ key: 'block-b1#0' })
+  expect(await has(/^Done$/)).toBe(true)
+  // S 切状态：Done → Todo（照 todoseq 的流转）
+  await ui.press({ key: 'status' })
   expect(await has(/^Todo$/)).toBe(true)
   // 角标跟着这一条走
   expect(await has(/^ 1$/)).toBe(true)
@@ -174,10 +177,11 @@ test('侧栏里改的状态，下一条消息带给 Claude', async ($, on) => {
   const ui = await $.ui.mount({ ...PANE, surface: 'vscode' })
   await ui.press({ key: 'view-me' })
   // Done → Todo → Doing → Done：改回原样不用说
-  for (let i = 0; i < 4; i++) await ui.press({ key: 'block-b1#0' })
+  await ui.press({ key: 'block-b1#0' })
+  for (let i = 0; i < 3; i++) await ui.press({ key: 'status' })
   await $.prompt.submit({ text: '继续' } as never)
   expect(contexts.at(-1)?.join('')).not.toContain('侧栏')
-  await ui.press({ key: 'block-b1#0' })
+  await ui.press({ key: 'status' })
   await $.prompt.submit({ text: '继续' } as never)
   expect(contexts.at(-1)?.join('')).toContain('「确认第 4 档是什么」')
   expect(contexts.at(-1)?.join('')).toContain('DONE → TODO')
