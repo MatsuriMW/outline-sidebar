@@ -12,6 +12,8 @@ from fontTools.pens.transformPen import TransformPen
 from fontTools.subset import Options, Subsetter
 from fontTools.ttLib import TTFont
 
+from align_icons import align
+
 pkgs, out = sys.argv[1], sys.argv[2]
 
 PHOSPHOR = {
@@ -81,6 +83,7 @@ def build(src, icons, codes, base, family, path, spin=None):
             rec.string = f'{ps};2026-10-21'
     if spin is not None:
         add_spin_frames(font, glyphs[base + list(icons).index(spin)], 0x100110, table)
+    align(font)
     font.save(path)
     return table
 

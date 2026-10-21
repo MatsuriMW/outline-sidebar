@@ -58,6 +58,8 @@ AI 时代，最珍贵的是人类完整的、不被切分的注意力（undivide
 /plugin install outline-sidebar --marketplace MatsuriMW/outline-sidebar
 ```
 
-图标靠 `fonts/` 里的两个字体显示（Phosphor 和 Lucide 的子集，放在 Unicode 补充私用区 B）。终端里要先安装这两个字体，再把它们加进终端字体的回退链；桌面版直接用 SVG，不需要装。
+图标靠 `fonts/` 里的两个字体显示（Phosphor 和 Lucide 的子集，放在 Unicode 补充私用区 B）。终端里要先安装这两个字体，再把它们加进终端字体的回退链；桌面版直接用 SVG，不需要装。字体更新后要重新安装、重开终端才会生效。
+
+图标按 Maple Mono 的文字中心对齐过（`tools/align_icons.py`）。换了别的终端字体、觉得图标偏上或偏下，改脚本开头的 `CENTER` 和 `HEIGHT` 再跑一遍就行。
 
 改了代码后，在 Claude Code 里运行 `/reload-plugins` 生效。
