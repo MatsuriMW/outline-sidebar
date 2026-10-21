@@ -39,6 +39,12 @@ export type Block = {
   status: Status
   /** 它做了什么 */
   did: string[]
+  /** 这一轮的证据：改的文件、跑的命令和结果，全部来自工具调用本身，不经过模型 */
+  evidence?: Evidence[]
+  /** did 每一条挂的证据（下标对 evidence）；模型只能从 evidence 里挑，挑不出就是空的 */
+  didEvidence?: number[][]
+  /** 看过证据的时间：ToReview 要先看过证据才能改成 Done */
+  reviewedAt?: number
   conclusion: string
   questions: string[]
   /** 需要我做什么；解决后保留，按状态显示成已完成 */
@@ -67,6 +73,9 @@ export type Block = {
   /** 这一轮还没结束时的实时进度；结束后去掉 */
   live?: Live
 }
+
+/** 一条证据：edit 是改了一个文件，run 是跑了一条命令；isOk 看工具有没有报错，tail 是输出的最后一行 */
+export type Evidence = { kind: 'edit' | 'run'; text: string; isOk: boolean; tail?: string }
 
 export type Live = {
   startedAt: number

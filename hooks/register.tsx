@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { Elements, EngineInterface, Register } from 'claude-code'
 
-import type { AgendaGroup, Block, Body, Kind, Level, Recap, Status, StatusChange, Tech, View } from '../types'
+import type { AgendaGroup, Block, Body, Evidence, Kind, Level, Recap, Status, StatusChange, Tech, View } from '../types'
 import type { Field, Line, MenuItem } from './outline'
 import { PH, PH_SVG } from './icons'
 import type { PhosphorIcon } from './icons'
@@ -15,6 +15,8 @@ import {
   hasOpenForMe,
   itemStatus,
   lineText,
+  isMark,
+  nextBadStatus,
   nextStatus,
   parseKey,
   FIELD,
@@ -80,6 +82,7 @@ const ACTIONS: { key: string; hotkey: string; label: string }[] = [
   { key: 'indent', hotkey: 'l', label: '缩进' },
   { key: 'outdent', hotkey: 'h', label: '反缩进' },
   { key: 'status', hotkey: 's', label: '切状态' },
+  { key: 'status-bad', hotkey: 'n', label: '负面状态' },
   { key: 'level', hotkey: 'o', label: '层级' },
   { key: 'zoom', hotkey: 'z', label: '聚焦' },
   { key: 'body', hotkey: 'f', label: '正文折叠' },
@@ -108,7 +111,7 @@ const phosphorIconSvg = (icon: PhosphorIcon, color: string) => {
 
 const phosphorSvg = (field: Field, color: string) => {
   const icon = FIELD[field].icon
-  return icon === 'point' ? undefined : phosphorIconSvg(icon, color)
+  return isMark(icon) ? undefined : phosphorIconSvg(icon, color)
 }
 
 const ICON_PX = 14
@@ -174,6 +177,8 @@ type Turn = {
   steps: string[]
   /** Claude Code 到目前为止写出的文字 */
   texts: string[]
+  /** 改了的文件、跑了的命令和结果，给「做了」挂证据 */
+  evidence: Evidence[]
 }
 
 const usageTotal = (u: { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number | null; cache_creation_input_tokens?: number | null } | undefined) =>
@@ -311,7 +316,7 @@ const SYSTEM = `你在给一段 Claude Code 会话做大纲。每次给你「现
 只输出一个 JSON 对象，不要任何别的文字，不要代码块标记。字段：
 - title：用户要 Claude Code 做什么，一句话，中文，不超过 30 字，动词开头
 - status：从下面选一个最贴切的关键词（照用户在 Obsidian todoseq 里的那一套）：${STATUS_LINES}
-- did：Claude Code 这一轮实际做了的事，每条一短句，没有就空数组
+- did：Claude Code 这一轮实际做了的事，数组，每条是 { "text": 一短句, "evidence": [证据编号] }；evidence 只能填下面「证据」里列出的编号，哪条证据能证明这件事做了就填哪条，没有能证明它的证据就填空数组，不许编；没做事就空数组
 - conclusion：这一轮定下来的结论，一句话，没有就空字符串
 - questions：还没解决的问题，没有就空数组
 - needsMe：需要用户做的事（确认、选择、手动操作），没有就空数组
@@ -341,6 +346,40 @@ const parseJson = (text: string) => {
 const strings = (value: unknown) =>
   Array.isArray(value) ? value.filter((one): one is string => typeof one === 'string' && one !== '') : []
 
+/** 证据最多记这么多条，交给模型的也是这些 */
+const MAX_EVIDENCE = 30
+
+/** 工具跑完记一条证据：改文件按文件去重，跑命令记成没成、输出的最后一行 */
+function addEvidence(turn: Turn, tool: string, input: Record<string, unknown>, isFailed: boolean, output: string | undefined) {
+  if (turn.evidence.length >= MAX_EVIDENCE) return
+  if ((tool === 'Edit' || tool === 'Write' || tool === 'NotebookEdit') && typeof input.file_path === 'string') {
+    const text = base(input.file_path)
+    const seen = turn.evidence.find(one => one.kind === 'edit' && one.text === text)
+    if (seen === undefined) turn.evidence.push({ kind: 'edit', text, isOk: !isFailed })
+    else if (!isFailed) seen.isOk = true
+  }
+  if (tool === 'Bash' && typeof input.command === 'string') {
+    const tail = (output ?? '').split('\n').map(line => line.trim()).filter(line => line !== '').at(-1)
+    turn.evidence.push({ kind: 'run', text: clip(input.command.split('\n')[0] ?? '', 80), isOk: !isFailed, ...(tail === undefined ? {} : { tail: clip(tail, 60) }) })
+  }
+}
+
+const evidenceText = (e: Evidence) => (e.kind === 'edit' ? `改了 ${e.text}${e.isOk ? '' : '（失败）'}` : `跑了 ${e.text}（${e.isOk ? '成功' : '报错'}${e.tail === undefined ? '' : `：${e.tail}`}）`)
+
+/** 模型给的 did：新格式是 { text, evidence: [编号] }，旧格式是字符串；编号从 1 开始，对不上的丢掉 */
+const parseDid = (value: unknown, count: number) => {
+  const did: string[] = []
+  const proofs: number[][] = []
+  for (const one of Array.isArray(value) ? value : []) {
+    const item = typeof one === 'string' ? { text: one, evidence: [] } : (one as { text?: unknown; evidence?: unknown })
+    if (typeof item.text !== 'string' || item.text === '') continue
+    did.push(item.text)
+    const nums = Array.isArray(item.evidence) ? item.evidence.filter((n): n is number => Number.isInteger(n) && n >= 1 && n <= count) : []
+    proofs.push([...new Set(nums)].map(n => n - 1))
+  }
+  return { did, proofs }
+}
+
 async function summarize($: EngineInterface, id: string, turn: Turn, answer: string, isAborted: boolean) {
   const before = (await read($, blocks)).filter(b => b.id !== id && !b.isPending && b.live === undefined)
   const prompt = [
@@ -349,8 +388,7 @@ async function summarize($: EngineInterface, id: string, turn: Turn, answer: str
     '刚结束的一轮：',
     `用户原话：${clip(turn.text, 2000)}`,
     `Claude Code 的回答：${clip(answer, 4000) || '（无文字回答）'}`,
-    `改动的文件：${[...turn.files].join('、') || '（无）'}`,
-    `跑过的命令：${turn.commands.slice(0, 10).map(c => clip(c, 120)).join('；') || '（无）'}`,
+    `证据（编号从 1 开始）：\n${turn.evidence.map((one, i) => `[${i + 1}] ${evidenceText(one)}`).join('\n') || '（无）'}`,
     `切出去的子任务：${turn.branches.map(br => `${br.title}（${clip(br.conclusion, 200)}）`).join('；') || '（无）'}`,
     isAborted ? '这一轮被用户中断了。' : '',
   ].join('\n')
@@ -359,6 +397,7 @@ async function summarize($: EngineInterface, id: string, turn: Turn, answer: str
   const data = reply.isAnswered ? parseJson(reply.text) : undefined
   const spent = usageTotal(reply.usage)
   const now = await $.clock.now()
+  const didParsed = parseDid(data?.did, turn.evidence.length)
 
   await setBlocks($, all => {
     const turnIds = new Set(all.filter(b => b.kind === 'turn').map(b => b.id))
@@ -375,7 +414,9 @@ async function summarize($: EngineInterface, id: string, turn: Turn, answer: str
           status: (STATUSES as string[]).includes(status) ? (status as Status) : isAborted ? 'PAUSED' : 'DONE',
           statusAt: now,
           needsMeStatus: undefined,
-          did: strings(data?.did),
+          did: didParsed.did,
+          evidence: turn.evidence,
+          didEvidence: didParsed.proofs,
           conclusion: typeof data?.conclusion === 'string' ? data.conclusion : '',
           questions: strings(data?.questions),
           needsMe: strings(data?.needsMe),
@@ -492,7 +533,10 @@ async function pick($: EngineInterface, key: string) {
   const { blockId, index } = parseKey(key)
   // 点块：第二下展开详情。点只挪光标，不改状态，改状态用 S
   if ((await read($, cursor)) === key) {
-    if (index === undefined) await update($, open, ids => toggle(ids, blockId))
+    if (index === undefined) {
+      await update($, open, ids => toggle(ids, blockId))
+      if ((await read($, open)).includes(blockId)) await markReviewed($, blockId)
+    }
   } else await update($, cursor, () => key)
 }
 
@@ -547,7 +591,29 @@ async function showDepth($: EngineInterface, depth: number) {
 
 async function toggleDetail($: EngineInterface) {
   const id = await cursorBlockId($)
-  if (id !== null) await update($, open, ids => toggle(ids, id))
+  if (id === null) return
+  await update($, open, ids => toggle(ids, id))
+  if ((await read($, open)).includes(id)) await markReviewed($, id)
+}
+
+/** 展开详情就算看过证据了 */
+async function markReviewed($: EngineInterface, id: string) {
+  const now = await $.clock.now()
+  await setBlocks($, all => all.map(b => (b.id === id && b.status === 'TOREVIEW' ? { ...b, reviewedAt: now } : b)))
+}
+
+/**
+ * 验收关口：ToReview 改成 Done 之前，要先展开详情看过证据。
+ * 没看过就替你展开，这一下不改状态；看完再按一次才算通过
+ */
+async function passesReview($: EngineInterface, b: Block, to: Status) {
+  if (b.status !== 'TOREVIEW' || to !== 'DONE') return true
+  if (b.reviewedAt !== undefined && b.reviewedAt >= (b.statusAt ?? 0)) return true
+  await update($, open, ids => (ids.includes(b.id) ? ids : [...ids, b.id]))
+  await markReviewed($, b.id)
+  const bare = b.didEvidence === undefined ? 0 : b.didEvidence.filter(nums => nums.length === 0).length
+  $.ui.toast(bare > 0 ? `先看证据：已展开，有 ${bare} 条「做了」没有证据；看完再按一次才改成 Done` : '先看证据：已展开，看完再按一次才改成 Done')
+  return false
 }
 
 async function reparent($: EngineInterface, direction: 'in' | 'out') {
@@ -581,13 +647,18 @@ async function changeStatus($: EngineInterface, pick: (current: Status) => Statu
   if (key === null) return
   const { blockId, index } = parseKey(key)
   const now = await $.clock.now()
+  const target = (await read($, blocks)).find(b => b.id === blockId)
+  if (index === undefined && target !== undefined && !(await passesReview($, target, pick(target.status)))) return
   let change: StatusChange | undefined
   await setBlocks($, all =>
     all.map(b => {
       if (b.id !== blockId) return b
       if (index === undefined) {
         const to = pick(b.status)
-        change = { key, what: `块 [${b.id}]「${b.title}」`, from: b.status, to }
+        // 验收通过：告诉 Claude 是看过证据才通过的，没证据的那几条也说出来
+        const bare = b.did.filter((_, i) => b.didEvidence !== undefined && (b.didEvidence[i] ?? []).length === 0)
+        const checked = b.status === 'TOREVIEW' && to === 'DONE' ? `（用户看过证据后验收${bare.length > 0 ? `；其中这几条没有工具调用能证明：${bare.join('；')}` : ''}）` : ''
+        change = { key, what: `块 [${b.id}]「${b.title}」${checked}`, from: b.status, to }
         return { ...b, status: to, isStatusManual: true, statusAt: now }
       }
       const marks = b.needsMe.map((_, i) => b.needsMeStatus?.[i] ?? null)
@@ -617,7 +688,7 @@ async function takeChanges($: EngineInterface) {
   await update($, changes, () => [])
   const lines = list.map(c => `- ${c.what}：${c.from} → ${c.to}`)
   return [
-    '用户在会话大纲侧栏里手动改了下面这些状态。这是用户在告诉你进展：「需要用户做」的事改成 DONE，表示用户已经做完了；块的状态改动表示用户对那件事的判断（比如 DONE 是认可做完，CANCELLED 是不做了）。据此接着做，不用复述这段说明。',
+    '用户在会话大纲侧栏里手动改了下面这些状态。这是用户在告诉你进展：「需要用户做」的事改成 DONE，表示用户已经做完了；块的状态改动表示用户对那件事的判断：DONE 是认可做完；FAILED 是用户认为没做成，要返工，先弄清哪里不对；ERRORED 是出了错卡住；HITLIMIT 是撞上额度或用量上限；SUSPENDED 是先搁置、暂时别碰；CANCELLED 是不做了。据此接着做，不用复述这段说明。',
     ...lines,
   ].join('\n')
 }
@@ -724,6 +795,7 @@ async function runAction($: EngineInterface, action: string) {
   if (action === 'indent') return reparent($, 'in')
   if (action === 'outdent') return reparent($, 'out')
   if (action === 'status') return cycleStatus($)
+  if (action === 'status-bad') return changeStatus($, nextBadStatus)
   if (action === 'level') return cycleLevel($)
   if (action === 'zoom') return toggleZoom($)
   if (action === 'body') return toggleBodyFold($)
@@ -737,8 +809,12 @@ async function runAction($: EngineInterface, action: string) {
   if (action === 'cycle') return cycleStatus($)
 }
 
-/** ⌥1 / ⌥2 / ⌥3 在美式键盘上打出来的字 */
-const DEPTH_KEYS: Record<string, number> = { '¡': 1, '™': 2, '£': 3 }
+/**
+ * 展开到第几层：⇧1 / ⇧2 / ⇧3 打出来的 ! @ #（中文输入法下是全角的），
+ * 以及 ⌥1 / ⌥2 / ⌥3 在美式键盘上打出来的 ¡ ™ £。
+ * 主推 ⇧：Tern、iTerm 这类终端默认拿 ⌥ 加数字切标签页，按键到不了 Claude Code
+ */
+const DEPTH_KEYS: Record<string, number> = { '!': 1, '@': 2, '#': 3, '！': 1, '＠': 2, '＃': 3, '¡': 1, '™': 2, '£': 3 }
 
 type KeyMessage = { type: 'key'; key: string; shift: boolean; ctrl: boolean; meta: boolean }
 
@@ -746,8 +822,8 @@ type KeyMessage = { type: 'key'; key: string; shift: boolean; ctrl: boolean; met
 async function handleKey($: EngineInterface, k: KeyMessage, keys: readonly View[]) {
   const isUp = k.key === 'up'
   const isDown = k.key === 'down'
-  // ⌥1 / ⌥2 / ⌥3：终端把 ⌥ 当 meta 时报成数字带 meta，否则美式键盘打出 ¡ ™ £
-  const depth = DEPTH_KEYS[k.key] ?? (k.meta && /^[1-3]$/.test(k.key) ? Number(k.key) : undefined)
+  // ⇧ 或 ⌥ 加 1～3：终端可能报成 ! @ #、¡ ™ £，也可能报成数字带 shift / meta
+  const depth = DEPTH_KEYS[k.key] ?? ((k.meta || k.shift) && /^[1-3]$/.test(k.key) ? Number(k.key) : undefined)
   if (depth !== undefined) return showDepth($, depth)
   // 缩进照 Org 的 ⌥→ / ⌥←
   if ((k.key === 'left' || k.key === 'right') && k.meta) return reparent($, k.key === 'right' ? 'in' : 'out')
@@ -762,6 +838,8 @@ async function handleKey($: EngineInterface, k: KeyMessage, keys: readonly View[
     if (v !== undefined) await switchView($, v)
     return
   }
+  // ⇧S：在负面状态之间转（终端可能报成大写 S，也可能是 s 带 shift）
+  if (k.key === 'S' || (k.key === 's' && k.shift)) return runAction($, 'status-bad')
   const action = ACTIONS.find(a => a.hotkey === k.key.toLowerCase())
   if (action !== undefined) return runAction($, action.key)
 }
@@ -1084,6 +1162,7 @@ export const register: Register = (on, options) => {
         startedAt: await $.clock.now(),
         steps: [],
         texts: [],
+        evidence: [],
       }
       const turn = current
       const number = (await read($, blocks)).reduce((n, b) => Math.max(n, b.turn), 0) + 1
@@ -1103,10 +1182,12 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
-  on('tool.call', ($, e, next) => {
+  on('tool.call', async ($, e, next) => {
+    // 先记下是哪一轮：工具跑完的时候，这一轮可能已经结束了
+    const turn = e.agentId === undefined ? current : undefined
+    const input = e as unknown as Record<string, unknown>
+    const tool = String(e.tool)
     if (current !== undefined && e.agentId === undefined) {
-      const input = e as unknown as Record<string, unknown>
-      const tool = String(e.tool)
       current.steps.push(describeStep(tool, input))
       queueLive($)
       if (typeof input.tool_use_id === 'string') current.rowIds.push(input.tool_use_id)
@@ -1121,7 +1202,9 @@ export const register: Register = (on, options) => {
         if (!current.mcp.includes(name)) current.mcp.push(name)
       }
     }
-    return next(e)
+    const result = await next(e)
+    if (turn !== undefined) addEvidence(turn, tool, input, result.isError === true || result.deny !== undefined, result.text)
+    return result
   })
 
   on('turn.complete', async ($, e, next) => {

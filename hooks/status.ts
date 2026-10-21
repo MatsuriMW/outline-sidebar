@@ -41,13 +41,21 @@ export const STATUS_INFO: Record<Status, StatusInfo> = {
 
 export const STATUSES = Object.keys(STATUS_INFO) as Status[]
 
-/** ⌘/ 循环：照 todoseq 的流转，TODO → DOING → DONE，别的（PAUSED、TOREVIEW、NEEDOK…）都回 DOING */
+/**
+ * S / ⌘/ 循环：照 todoseq 的流转，TODO → DOING → DONE；TOREVIEW 按一下是验收通过，到 DONE（要先看过证据）。
+ * 别的（PAUSED、NEEDOK…）都回 DOING
+ */
 export const nextStatus = (st: Status): Status => {
   if (st === 'TODO') return 'DOING'
-  if (st === 'DOING') return 'DONE'
+  if (st === 'DOING' || st === 'TOREVIEW') return 'DONE'
   if (st === 'DONE' || st === 'FAILED' || st === 'CANCELLED') return 'TODO'
   return 'DOING'
 }
+
+/** ⇧S / N 循环：只在不顺利的几个状态之间转 */
+export const BAD_STATUSES: readonly Status[] = ['FAILED', 'ERRORED', 'HITLIMIT', 'SUSPENDED', 'CANCELLED']
+
+export const nextBadStatus = (st: Status): Status => BAD_STATUSES[(BAD_STATUSES.indexOf(st) + 1) % BAD_STATUSES.length]!
 
 export const isOpenStatus = (st: Status) => STATUS_INFO[st].group !== 'completed'
 

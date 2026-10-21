@@ -26,10 +26,9 @@ const REPLIES = () => [
 ]
 
 /** 引擎这一侧：每个 hook 替引擎回答 */
-const engine = (on: On, copied: string[], stored: Record<string, unknown> = {}) => {
+const engine = (on: On, copied: string[], stored: Record<string, unknown> = {}, replies: unknown[] = REPLIES()) => {
   const clock = mock.clock(on)
   mock.store(on, stored)
-  const replies = REPLIES()
   on('model.complete', (_, e) => {
     const system = String((e as { system?: string }).system ?? '')
     const isRecap = system.includes('回顾')
@@ -51,7 +50,11 @@ const engine = (on: On, copied: string[], stored: Record<string, unknown> = {}) 
   on('session.id', () => ({ value: 'sess-1' }) as never)
   on('agent.list', () => ({ value: [{ id: 'ag1', description: '查 Hexo 文档', type: 'Explore', status: 'completed' }] }) as never)
   on('session.start', (_, e) => ({ cwd: e.cwd }))
-  on('tool.call', () => ({ result: {} }) as never)
+  // Bash 的命令里带 fail 就当报错
+  on('tool.call', (_, e) => {
+    const command = String((e as { command?: unknown }).command ?? '')
+    return (command.includes('fail') ? { result: {}, isError: true, text: 'boom' } : { result: {}, text: 'ok\n13 pass' }) as never
+  })
   on('turn.start', (_, e) => ({ turnId: e.turnId }))
   on('prompt.submit', (_, e) => {
     contexts.push([...((e as { context?: string[] }).context ?? [])])
@@ -102,6 +105,12 @@ test('三轮对话：视图、子任务、技术信息、待办消解、导出�
   expect(await has(/\[子任务\]/)).toBe(true)
   expect(await has(/查 Hexo 文档/)).toBe(true)
   expect(await has(/^Done$/)).toBe(true)
+
+  // 我让它做的：每件事带上我的原话、做了几件、结论
+  await ui.press({ key: 'view-asks' })
+  expect(await has(/每日回顾的随机漫步加个时间筛选/)).toBe(true)
+  expect(await has(/做了 1 件/)).toBe(true)
+  expect(await has(/默认全部/)).toBe(true)
 
   // 需要我做的：第 4 档那一条单独一行，第 3 轮解决了，是 Done
   await ui.press({ key: 'view-me' })
@@ -238,7 +247,16 @@ test('终端里的树：Logseq 式按键，⌘/ 切状态', async ($, on) => {
   await ui.key({ key: 'down', ctrl: true, in: 'tree' })
   expect(await has(/修 Hexo 部署/)).toBe(true)
 
-  // ⌥1 只看第 1 层，⌥2 展开到第 2 层（终端把 ⌥ 报成 meta，或者打出 ¡ ™）
+  // ⇧1 只看第 1 层，⇧2 展开到第 2 层（终端打出 ! @，或者报成数字带 shift；中文输入法下是全角的）
+  await ui.key({ key: '!', in: 'tree' })
+  expect(await has(/修 Hexo 部署/)).toBe(false)
+  await ui.key({ key: '@', in: 'tree' })
+  expect(await has(/修 Hexo 部署/)).toBe(true)
+  await ui.key({ key: '1', shift: true, in: 'tree' })
+  expect(await has(/修 Hexo 部署/)).toBe(false)
+  await ui.key({ key: '＠', in: 'tree' })
+  expect(await has(/修 Hexo 部署/)).toBe(true)
+  // ⌥ 的写法也认（终端把 ⌥ 报成 meta，或者打出 ¡ ™）
   await ui.key({ key: '1', meta: true, in: 'tree' })
   expect(await has(/修 Hexo 部署/)).toBe(false)
   await ui.key({ key: '™', in: 'tree' })
@@ -418,4 +436,48 @@ test('按格子宽度折行：中文随处可断，英文单词不拆', async ()
   // 英文单词整个挪到下一行
   expect(wrapCells('运行 /reload-plugins 使改动生效', 16)).toEqual(['运行', '/reload-plugins', '使改动生效'])
   expect(wrapCells('短', 20)).toEqual(['短'])
+})
+
+test('「做了」挂证据；ToReview 先看证据才能改成 Done；⇧S 在负面状态之间转', async ($, on) => {
+  const reply = {
+    title: '把测试修好', status: 'TOREVIEW', conclusion: '', questions: [], needsMe: [], parent: null, resolved: [],
+    // 编号 9 对不上任何证据，要丢掉
+    did: [{ text: '改了大纲', evidence: [1] }, { text: '跑通了测试', evidence: [2, 9] }, { text: '顺手优化了性能', evidence: [] }],
+  }
+  const clock = engine(on, [], {}, [reply])
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.turn.start({ text: '把测试修好', turnId: 't1' })
+  await $.tool.call({ tool: 'Edit', file_path: '/x/outline.ts', old_string: 'a', new_string: 'b' } as never)
+  await $.tool.call({ tool: 'Bash', command: 'claude plugin test .' } as never)
+  await $.tool.call({ tool: 'Bash', command: 'npm run fail' } as never)
+  await $.turn.complete({ answer: '修好了', durationMs: 1000, isAborted: false, turnId: 't1', reason: 'answer', usage: { ...USAGE, model: 'claude-opus-5-5' } })
+  await clock.settle()
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'vscode' })
+  const has = async (text: RegExp) => (await ui.find({ type: 'Text', text })) !== undefined
+  await ui.press({ key: 'view-done' })
+  expect(await has(/改 outline\.ts/)).toBe(true)
+  expect(await has(/✓ claude plugin test \. → 13 pass/)).toBe(true)
+  expect(await has(/顺手优化了性能（无证据）/)).toBe(true)
+  // 没被哪条「做了」引用的证据不画
+  expect(await has(/npm run fail/)).toBe(false)
+
+  // 验收关口：光标已经在 b1 上、详情没展开。第一下只展开证据，第二下才改成 Done
+  await ui.press({ key: 'view-all' })
+  expect(await has(/跑通了测试/)).toBe(false)
+  await ui.press({ key: 'status' })
+  expect(await has(/^ToReview$/)).toBe(true)
+  expect(await has(/跑通了测试/)).toBe(true)
+  await ui.press({ key: 'status' })
+  expect(await has(/^Done$/)).toBe(true)
+  // 下一条消息告诉 Claude：看过证据才验收，哪几条没证据
+  await $.prompt.submit({ text: '继续' } as never)
+  expect(contexts.at(-1)?.join('')).toContain('用户看过证据后验收；其中这几条没有工具调用能证明：顺手优化了性能')
+
+  // 负面状态循环：Failed → Errored → Hit Limit! → Suspended → Cancelled → Failed
+  await ui.press({ key: 'status-bad' })
+  expect(await has(/^Failed$/)).toBe(true)
+  await ui.press({ key: 'status-bad' })
+  expect(await has(/^Errored$/)).toBe(true)
+  await ui.unmount()
 })

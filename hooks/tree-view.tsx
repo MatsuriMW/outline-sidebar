@@ -92,7 +92,7 @@ const TreeView: ClientModule<TreeProps, State> = (props, surface) => {
     // 视图栏：只能选视图和进入，碰不到树
     if (scope === 'tabs') {
       if (event.key === 'left' || event.key === 'right') surface.post({ type: 'action', action: event.key === 'left' ? 'view-prev' : 'view-next' })
-      else if (/^[1-9¡™£]$/.test(event.key)) surface.post({ type: 'key', key: event.key, shift: false, ctrl: false, meta: event.meta === true })
+      else if (/^[1-9!@#！＠＃¡™£]$/.test(event.key)) surface.post({ type: 'key', key: event.key, shift: event.shift === true, ctrl: false, meta: event.meta === true })
       else if (event.key === 'return' || event.key === 'down' || event.key === 'j' || event.key === ' ') surface.post({ type: 'action', action: 'enter-view' })
       return
     }

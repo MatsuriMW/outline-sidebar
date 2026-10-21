@@ -1,9 +1,9 @@
-import type { Block, Kind, Status, Tech, View } from '../types'
+import type { Block, Evidence, Kind, Status, Tech, View } from '../types'
 import { PH } from './icons'
 import type { PhosphorIcon } from './icons'
 import { STATUS_INFO, isForMe, isOpenStatus, statusText } from './status'
 
-export { STATUSES, STATUS_GAP, STATUS_INFO, isForMe, isOpenStatus, nextStatus, normalizeStatus, statusText } from './status'
+export { STATUSES, STATUS_GAP, STATUS_INFO, isForMe, isOpenStatus, nextBadStatus, nextStatus, normalizeStatus, statusText } from './status'
 
 export const VIEW_INFO: Record<View, { label: string; aliases: string[] }> = {
   conclusions: { label: '结论', aliases: ['concl', 'conclusion'] },
@@ -45,15 +45,16 @@ export const KIND_BADGE: Record<Kind, { text: string; color: string } | undefine
   recap: { text: '回顾', color: 'remember' },
 }
 
-// ---------- 字段图标（Phosphor；「需要我做」用 ASCII 的 -） ----------
+// ---------- 字段图标（Phosphor；「需要我做」用 ASCII 的 -，证据用 ↳） ----------
 
 export type Field =
-  | 'needsMe' | 'did' | 'files' | 'conclusion' | 'question' | 'resolved' | 'ask'
+  | 'needsMe' | 'did' | 'proof' | 'files' | 'conclusion' | 'question' | 'resolved' | 'ask'
   | 'stats' | 'tokens' | 'cache' | 'time' | 'model' | 'skills' | 'mcp' | 'slash' | 'agents' | 'outline' | 'live' | 'last' | 'note'
 
-export const FIELD: Record<Field, { icon: PhosphorIcon | 'point'; label: string }> = {
+export const FIELD: Record<Field, { icon: PhosphorIcon | Mark; label: string }> = {
   needsMe: { icon: 'point', label: '需要我做' },
   did: { icon: 'did', label: '做了' },
+  proof: { icon: 'proof', label: '证据' },
   files: { icon: 'files', label: '改了的文件' },
   conclusion: { icon: 'conclusion', label: '结论' },
   question: { icon: 'question', label: '还没解决的问题' },
@@ -78,9 +79,14 @@ export const FIELD: Record<Field, { icon: PhosphorIcon | 'point'; label: string 
 /** 「需要我做」那一条行首的记号 */
 export const ITEM_MARK = '-'
 
+/** 不用图标字体、直接画字的记号 */
+const MARKS = { point: ITEM_MARK, proof: '↳' } as const
+type Mark = keyof typeof MARKS
+export const isMark = (icon: PhosphorIcon | Mark): icon is Mark => icon in MARKS
+
 export const glyph = (field: Field) => {
   const icon = FIELD[field].icon
-  return icon === 'point' ? ITEM_MARK : PH[icon]
+  return isMark(icon) ? MARKS[icon] : PH[icon]
 }
 
 /** 终端里的显示宽度：中日韩文字、全角符号和 emoji 占两格；图标字体（补充私用区）占一格 */
@@ -227,6 +233,50 @@ const one = (field: Field, text: string, extra: Partial<Line> = {}): Line => ({ 
 const group = (field: Field, items: readonly string[]): Line[] =>
   items.length <= 1 ? items.map(text => one(field, text)) : [one(field, ''), ...items.map(text => one(field, text, { level: 1, bullet: true }))]
 
+/** 一条证据：改了哪个文件；跑了哪条命令，✓ 成功 / ✗ 报错，→ 后面是输出的最后一行 */
+const evidenceLine = (e: Evidence): Line => {
+  const text = e.kind === 'edit' ? `${e.isOk ? '' : '✗ '}改 ${e.text}` : `${e.isOk ? '✓' : '✗'} ${e.text}${e.tail === undefined ? '' : ` → ${e.tail}`}`
+  const color = !e.isOk ? STATUS_INFO.FAILED.color : e.kind === 'run' ? STATUS_INFO.DONE.color : undefined
+  return one('proof', text, { level: 1, ...(color === undefined ? {} : { color }) })
+}
+
+/** 每条「做了」下面挂它的证据；一条证据都挂不上的标「无证据」，验收时一眼看得到 */
+const didLines = (b: Block): Line[] => {
+  // 加证据之前存下的块没有这一项，照旧画
+  if (b.didEvidence === undefined) return group('did', b.did)
+  const all = b.evidence ?? []
+  const isMany = b.did.length > 1
+  const out: Line[] = isMany ? [one('did', '')] : []
+  b.did.forEach((text, i) => {
+    const proofs = (b.didEvidence?.[i] ?? []).map(n => all[n]).filter((e): e is Evidence => e !== undefined)
+    const extra: Partial<Line> = { ...(isMany ? { level: 1 as const, bullet: true as const } : {}), ...(proofs.length === 0 ? { color: STATUS_INFO.TOREVIEW.color } : {}) }
+    out.push(one('did', proofs.length === 0 ? `${text}（无证据）` : text, extra))
+    out.push(...proofs.slice(0, 3).map(evidenceLine))
+    if (proofs.length > 3) out.push(one('proof', `另有 ${proofs.length - 3} 条`, { level: 1 }))
+  })
+  return out
+}
+
+/**
+ * 「我让它做的」：每件事带上我的原话、做成了几件、证据够不够、还有几件等我，以及结论。
+ * 被打断以后扫一遍这个视图，就能把「当时要干什么、做到哪了」重新装回脑子里
+ */
+const askLines = (b: Block): Line[] => {
+  const lines: Line[] = []
+  const said = b.ask.replace(/\s+/g, ' ').trim()
+  if (said !== '' && said !== b.title) lines.push(one('ask', clip(said, 80)))
+  const parts: Part[] = []
+  if (b.did.length > 0) {
+    const proven = b.didEvidence?.filter(nums => nums.length > 0).length
+    parts.push({ field: 'did', text: proven === undefined ? `做了 ${b.did.length} 件` : `做了 ${b.did.length} 件 · 有证据 ${proven}` })
+  }
+  const waiting = b.needsMe.filter((_, i) => isOpenStatus(itemStatus(b, i))).length
+  if (waiting > 0) parts.push({ field: 'needsMe', text: `等我 ${waiting} 件` })
+  if (parts.length > 0) lines.push({ parts })
+  if (b.conclusion !== '') lines.push(one('conclusion', b.conclusion))
+  return lines
+}
+
 const elapsed = (ms: number) => {
   const s = Math.max(0, Math.round(ms / 1000))
   return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m${String(s % 60).padStart(2, '0')}s`
@@ -270,7 +320,8 @@ export const liveLines = (b: Block, now: number): Line[] => {
 export const blockLines = (b: Block, v: View, isOpen: boolean, now = 0): Line[] => {
   const lines: Line[] = b.live === undefined ? [] : liveLines(b, now)
   // 进行中的块：手动刷新出来的进展在任何视图里都直接露出来
-  if (v === 'done' || isOpen || b.live !== undefined) lines.push(...group('did', b.did))
+  if (v === 'asks' && !isOpen && b.live === undefined) return [...lines, ...askLines(b)]
+  if (v === 'done' || isOpen || b.live !== undefined) lines.push(...didLines(b))
   if ((v === 'done' || isOpen) && b.files.length > 0) lines.push(one('files', b.files.join('、')))
   if ((v === 'conclusions' || v === 'done' || isOpen) && b.conclusion !== '') lines.push(one('conclusion', b.conclusion))
   if (v === 'tech' && b.tech !== undefined) lines.push(...techLines(b.tech))
