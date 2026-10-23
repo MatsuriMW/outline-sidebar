@@ -1,304 +1,313 @@
 # Outline Sidebar
 
-Claude Code 的 mod：把一次会话整理成 Logseq 式的可折叠大纲侧栏。一轮对话是一块，顺着同一个话题深入就成为子块，换了话题就是新的顶层块。层级由 AI 出初稿，你在侧栏里手动纠正。
+English | [简体中文](README.zh-CN.md)
 
-> **English.** A Claude Code mod that turns a session into a collapsible, Logseq-style outline sidebar: one block per turn, filtered into views like *what I need to do*, *what I asked it to do* and *what it has done*. It works on the human side of the harness: every "done" claim carries evidence pulled straight from tool calls, review is gated on looking at that evidence, and the statuses you set (approve, rework, unclear, yes / no, skip) flow back to Claude as structured updates, so it reworks, explains or carries on without you retyping anything. Use it in the terminal (the Claude Code CLI), which is what it is built for, with extra care for CJK input methods (it switches your keyboard to English when you click into the sidebar). The desktop app can open it but is not polished yet. The docs below are in Chinese.
->
-> Install: `/plugin install outline-sidebar --marketplace MatsuriMW/outline-sidebar`
+- [Why I built this](#why-i-built-this)
+- [What it is](#what-it-is)
+- [More views](#more-views)
+- [What it does in the harness](#what-it-does-in-the-harness)
+- [Built for the terminal and CJK input methods](#built-for-the-terminal-and-cjk-input-methods)
+- [Usage](#usage)
+  - [Recommended: make view 2 your main screen](#recommended-make-view-2-your-main-screen)
+  - [Commands](#commands)
+  - [Views (number keys)](#views-number-keys)
+  - [Replying and reviewing](#replying-and-reviewing)
+  - [Moving and folding](#moving-and-folding)
+  - [Other keys](#other-keys)
+  - [Task statuses](#task-statuses)
+- [Install](#install)
+- [What it runs, sends, reads and writes](#what-it-runs-sends-reads-and-writes)
+  - [Hooks it registers](#hooks-it-registers)
+- [License](#license)
 
-> **推荐在终端里用（Claude Code CLI）。** 目前只适配了终端，Desktop 版和 VS Code 里也能打开，但会退回成普通按钮，键盘操作、图标、中文排版都没调过，Desktop 版后面再做。
+## Why I built this
 
-它是我在 harness 工程上的一次实践。大多数 harness 管的是 Agent 那一侧：给它什么上下文、什么工具、怎么验证它的产出。这个 mod 管的是人那一侧：人怎么看清 Agent 做了什么，人的判断又怎么可靠地回到 Agent 那里。
+In the age of AI, the most precious thing a person has is whole, undivided attention.
 
-![Outline Sidebar：左边是「我让它做的」，右边是「它已做的」和挂在每条下面的证据](docs/outline-sidebar.png)
+Knowledge work has left the farming age for the age of automation: we now drive giant multi-row tractors. Most of the work goes to AI, and what is left for people is review: judging whether it got things right and where to go next. Human attention becomes the bottleneck, so guarding it becomes the key. Attention alone is not enough, though. You also need a good harness to help you review.
 
-> 左：3 号视图「我让它做的」，每件事带着我的原话、做成了几件、有几件有证据、结论。右：5 号视图「它已做的」，每条「做了」下面挂着证据；挂不上证据的标黄。图是用 mod 自己的大纲代码按一段示例会话生成的。
+More precisely, what you need is **attention loaded with the problem**: holding the state of the whole problem in your head at once, knowing what counts as right, what has been tried and where things are most likely to break. That state takes twenty or thirty minutes to build and three seconds to destroy, and the cost of rebuilding it is not linear. What really gets shredded is this loaded state, not time.
 
-## 再看几个视图
+A long Claude Code session is the easiest place to shred it. The conversation is a stream that only grows downward, with conclusions, decisions waiting on me, work I handed off, finished work and technical details all mixed together. To recover what we just decided or what is still waiting on me, I can only scroll up, and every scroll eats into that loaded state. Without good harness engineering, cognitive debt keeps piling up.
 
-用的是我开发这个 mod 那场会话的真实大纲，按终端里的排版画出来（正在跑的那一轮没放进来，每张只截了前面一屏）。
+## What it is
 
-2 号视图「需要我做的」，推荐的主界面：等你验收的块、问你的问题、交给你做的事排成一个队列，每一条单独改状态；整棵都了结的子树自动折成一行（带 ▸ 的那种）。
+A Claude Code mod that turns a session into a collapsible, Logseq-style outline sidebar. Each turn is a block; going deeper into the same topic makes a child block, and a new topic starts a new top-level block. The AI drafts the hierarchy and you correct it by hand in the sidebar.
 
-![需要我做的视图](docs/me.png)
+> **Use it in the terminal (the Claude Code CLI).** Only the terminal is polished so far. The desktop app and VS Code can open it, but it falls back to plain buttons, and keyboard control, icons and CJK layout have not been tuned there. Desktop support comes later.
 
-1 号视图「结论」：每一轮定下来的结论，顺着层级排；没有结论的块变暗，只留着当上下文。
+It is my take on harness engineering. Most harnesses work on the agent's side: what context it gets, which tools, how its output is verified. This mod works on the human side: how a person sees clearly what the agent did, and how that person's judgment gets back to the agent reliably.
 
-![结论视图](docs/conclusions.png)
+![Outline Sidebar: "What I asked it to do" on the left, "What it has done" on the right with evidence under each item](docs/outline-sidebar.png)
 
-6 号视图「技术信息」：顶上是整场会话的合计和验收指标（本次会话、所有会话各一遍），下面每一轮的用量、缓存命中率、耗时、模型、用到的技能，以及大纲自己总结花掉的 token。截图里证据和拦下都是「—」，因为这些块是在加证据功能之前做的。
+> Left: view 3, *What I asked it to do*. Each request carries my original words, how many items got done, how many have evidence, and the conclusion. Right: view 5, *What it has done*. Every "done" item has its evidence underneath; items without evidence are marked yellow. The image was generated by the mod's own outline code from a sample session. The UI text is in Chinese for now.
 
-![技术信息视图](docs/tech.png)
+## More views
 
-## 为什么做这个
+These are drawn from the real outline of the session in which I built this mod, laid out the way the terminal shows them (the turn that was still running is left out, and each image shows only the first screen).
 
-AI 时代，最珍贵的是人类完整的、不被切分的注意力（undivided attention）。
+View 2, *What I need to do*, the recommended main screen: blocks waiting for your review, questions for you and tasks handed to you form one queue, and each item gets its own status. A subtree in which everything is settled folds into one line (the ones with ▸).
 
-人在知识领域已经从农耕时代进入了自动化时代，坐上了大型连排拖拉机。活儿大多交给 AI 去干，人要做的是 review：判断它做得对不对、接下来往哪儿走。这时候人的注意力成了瓶颈，守住自己的注意力就成了关键。光有注意力还不够，还要有好的 harness 来帮你 review。
+![What I need to do](docs/me.png)
 
-更严格地说，需要的是**装着问题的注意力**：脑子里同时持有整个问题的状态，知道什么算对、什么已经试过、哪里最可能出错。这个状态建起来要二三十分钟，毁掉只要三秒，重来的成本也不成线性关系。真正被切碎的是这种装载状态，并非时间。
+View 1, *Conclusions*: the conclusion reached in each turn, in outline order. Blocks without a conclusion are dimmed and kept only as context.
 
-和 Claude Code 的一场长会话，就是最容易把这种状态切碎的地方。对话是一条只往下长的流，结论、要我拍板的事、交代出去的活、已经做完的事、技术细节全搅在一起。想找回刚才定了什么、还有什么在等我，只能往上翻，每翻一次都在消耗那份装载状态。没有好的 harness engineering，认知债务就会越积越重。
+![Conclusions](docs/conclusions.png)
 
-## 它在 harness 里做什么
+View 6, *Technical info*: totals and review metrics for the whole session at the top (once for this session, once across all sessions), then each turn's usage, cache hit rate, duration, model and skills used, plus the tokens the outline spent summarizing. Evidence and blocked counts show "—" in the screenshot because those blocks predate the evidence feature.
 
-它在 harness 里实际承担两个角色：
+![Technical info](docs/tech.png)
 
-1. **可观测性**：结论、要我拍板的事、交代出去的活、它做完的事，分开显示。不用在一条流里往上翻。这直接对着人的瓶颈：review 时的注意力。
-2. **结构化的反馈回路**：在侧栏改的状态会变成结构化信息，在你发下一条消息时传回给 Claude。比如把「确认仓库是否公开」标成 Done，Claude 收到的是一条明确的状态变更，用不着再读一段话去猜。人的判断用固定格式回到 Agent 的上下文，这是比较硬的 harness 设计，比在聊天里说一句可靠。
+## What it does in the harness
 
-围绕这两个角色，又加了几样东西，让 review 看的是证据而不只是 AI 写的摘要，让验收的结论能推动下一步：
+In the harness it plays two roles:
 
-- **「做了」挂证据**：每一轮里改了哪些文件、跑了哪些命令、命令成没成、输出的最后一行，都直接从工具调用里记下来，不经过模型。总结时，模型只能从这些记录里挑出能证明某件事的那几条，挑不出就标「无证据」。
-- **验收关口**：状态是 ToReview 的块，要改成 Done，得先展开详情看过证据。没看过就按 S，这一下只会替你展开证据、不改状态，看完再按一次才算通过。通过时会告诉 Claude「用户看过证据后验收」，有哪几条「做了」没有证据，也一并说出来。
-- **验收没通过，Claude 接着回应**：⇧ 加首字母直接标成对应的状态，B 在它们之间从轻到重循环。待验收的块被标成这些状态，或者在 ⏎ 菜单里打回 Doing，停手 4 秒后（留时间换到想要的状态）mod 会替你发一条消息，按最终状态告诉 Claude 怎么接：
+1. **Observability**: conclusions, decisions waiting on me, work handed out and work it finished are shown apart, so there is no scrolling up through one stream. This goes straight at the human bottleneck: attention during review.
+2. **A structured feedback loop**: statuses you change in the sidebar become structured information that reaches Claude with your next message. Mark "check whether the repo is public" as Done, and Claude receives an explicit status change instead of a paragraph it has to interpret. Human judgment returns to the agent's context in a fixed format, which is a harder piece of harness design than a sentence in the chat.
 
-  | 键 | 状态 | Claude 怎么接 |
+Around these two roles there are a few more pieces, so that review looks at evidence rather than an AI-written summary, and so that a review verdict drives the next step:
+
+- **Evidence under every "done"**: the files edited in each turn, the commands run, whether they succeeded and their last output line are recorded straight from the tool calls, without going through a model. When summarizing, the model can only pick the records that prove a claim from that list; if it finds none, the claim is marked "no evidence".
+- **A review gate**: to change a ToReview block to Done you must first expand its details and look at the evidence. Press S before you have looked, and it only expands the evidence for you without changing the status; press again after looking to approve. On approval Claude is told "the user approved after looking at the evidence", along with which "done" items had no evidence.
+- **When review fails, Claude responds**: ⇧ plus the first letter sets a status directly, and B cycles through them from mild to severe. When a block waiting for review gets one of these statuses, or is sent back to Doing from the ⏎ menu, the mod sends a message for you 4 seconds after you stop (time to switch to the status you actually want), telling Claude how to continue based on the final status:
+
+  | Key | Status | How Claude continues |
   |---|---|---|
-  | ⇧R | Rework（要改） | 方向对、细节要改：先复述要改哪几处，你确认了再动手，改完再交给你验收 |
-  | ⇧U | Unclear?（没看懂） | 先不改代码，拿这一轮的改动和命令结果解释清楚：做了什么、为什么、怎么验证的 |
-  | ⇧F | Failed | 对照改动和命令结果找原因：原因清楚就返工，改完再交给你验收；拿不准就先追问你 |
-  | ⇧S | Suspended | 不再动它，记下做到哪、还差什么，方便以后接上 |
-  | ⇧C | Cancelled | 停下；已经改了文件就列出来，问你要不要撤回 |
-  | ⏎ 菜单 | Doing（打回） | 说清还差什么，接着做完 |
+  | ⇧R | Rework | Right direction, details need changes: it first restates what to change, starts once you confirm, then hands it back for review |
+  | ⇧U | Unclear? | It does not touch code yet; it explains, from this turn's edits and command results, what it did, why and how it checked |
+  | ⇧F | Failed | It looks for the cause in the edits and command results: if the cause is clear it reworks and hands it back for review; if not, it asks you first |
+  | ⇧S | Suspended | It leaves it alone and notes how far it got and what is missing, so it can be picked up later |
+  | ⇧C | Cancelled | It stops; if it already edited files it lists them and asks whether to revert |
+  | ⏎ menu | Doing (sent back) | It says what is still missing and finishes the job |
 
-  4 秒内改回 Done 就不发。Claude 问你的问题（「要我接着加吗？」这类）也一样：在「需要我做的」里按 Y 或 N，停手 4 秒后作为回答发过去，它照着接着做；交给你自己做的事（「重开终端看效果」这类）答 Y / N 不单独发，等你下一条消息一起带过去。Errored 和 Hit Limit! 不在这里：它们是 Agent 那边报给你的，不用你告诉它。一轮因 API 出错结束，mod 直接标成 Errored；出错时的回答里提到用量上限（rate limit、usage limit、额度这类字），就标成 Hit Limit!。这一步看的是字，引擎在这里不给错误种类。
+  Change it back to Done within 4 seconds and nothing is sent. Questions Claude asks you ("shall I go on and add it?") work the same way: press Y or N in *What I need to do*, and 4 seconds after you stop it goes out as your answer and Claude acts on it. For tasks handed to you ("restart the terminal to see the effect"), Y / N is not sent on its own but rides along with your next message. Errored and Hit Limit! are not in this list: the agent side reports them to you, so you never have to tell it. When a turn ends on an API error the mod marks it Errored; if the reply at that point mentions a usage limit (rate limit, usage limit, quota and similar words), it is marked Hit Limit!. This step reads the words, because the engine does not report an error type here.
 
-  一次打回好几件时，消息里还会让 Claude 把互不相干、不改同一批文件的几件交给子代理并行做，碰同一批文件的按顺序来；子代理在大纲里显示成那一轮下面的子块。
-- **按条自动了结**：你在后面的消息里说「重开过了」「就这么定」，总结时会把对应的那一条「需要我做的」直接标 Done；Claude 说它替你办了、或者判断不用你做了的，只改成 ToReview，等你看一眼，不让 AI 自己说了算。按条判断，一块里只了结了一条，就只改那一条。自动改的前面带「[自动]」，你一改状态就消失。
-- **指标**：6 号视图「技术信息」底部，按本次会话和所有会话各算一遍：证据覆盖率（「做了」里有证据的比例）、验收拦下率（验收时没让通过的比例）、返工率（标了 Done 又被重新打开的比例）、手动纠正过层级的块数。用来看这套 harness 到底有没有拦下东西、AI 的说法有多少能落到证据上。
+  When you send back several items at once, the message also asks Claude to hand independent ones that do not touch the same files to subagents in parallel, and to do the ones sharing files in order. Subagents show up in the outline as child blocks of that turn.
+- **Items settle themselves one by one**: if you say in a later message "restarted it" or "go with that", the summary marks the matching *What I need to do* item Done. If Claude says it did the task for you, or decides you no longer need to, the item only becomes ToReview and waits for you to glance at it; the AI does not get the final word. This is judged per item: if only one item in a block was settled, only that one changes. Automatic changes carry a "[自动]" (auto) mark that disappears as soon as you change the status.
+- **Metrics**: at the bottom of view 6, *Technical info*, computed once for this session and once across all sessions: evidence coverage (share of "done" items with evidence), review block rate (share of reviews you did not approve), rework rate (share of Done items reopened later) and the number of blocks whose hierarchy you corrected by hand. They show whether this harness actually catches anything, and how many of the AI's claims land on evidence.
 
-被打断以后，最快把注意力装回来的办法是看 3 号视图「我让它做的」：我当时原话怎么说的、它做成了几件、有几件有证据、还有几件在等我、结论是什么，一屏扫完。
+After an interruption, the fastest way to load your attention back is view 3, *What I asked it to do*: what I said back then, how many items it finished, how many have evidence, how many are still waiting on me and what the conclusion was, all on one screen.
 
-它不管的也写清楚：它不约束 Agent，护栏、权限、测试这些控制层不归它管；它主要看单场会话，跨会话只有 `/agenda` 汇总还没办完的事。
+What it does not do: it does not constrain the agent. Guardrails, permissions, tests and the rest of the control layer are not its job. It mostly looks at a single session; across sessions there is only `/agenda`, which collects what is still open.
 
-## 为终端和中文输入法做的优化
+## Built for the terminal and CJK input methods
 
-现在主要优化的是 Claude Code 的**终端版**：键盘操作、图标字体、中文排版都是照终端调的。桌面版和 VS Code 里也能用，但会退回成普通按钮，比较简陋，客户端版本后面再优化。
+It is tuned for the **terminal** version of Claude Code: keyboard control, icon fonts and CJK layout are all adjusted for the terminal. The desktop app and VS Code work too, but fall back to plain buttons and are fairly bare; client versions come later.
 
-终端里，键盘快捷键碰上中文输入法很麻烦：J/K、T、S 这些字母键会先被输入法拿去组字，到不了侧栏，按下去只会弹出候选框。国内用户基本都开着拼音或鼠须管，所以这里专门处理了几件事：
+In the terminal, keyboard shortcuts and Chinese input methods get in each other's way: letter keys like J/K, T and S are grabbed by the IME to compose characters, never reach the sidebar, and just pop up a candidate window. Almost every Chinese user has Pinyin or Squirrel (Rime) on, so a few things are handled specifically:
 
-- **点进侧栏自动切英文**：点侧栏任何地方（大纲树、视图栏、工具栏）都会把输入法切到英文键盘；回到对话框敲第一个键时切回你原来的输入法，这个键只用来切换，不会打进对话框。用的是 macOS 的输入源接口，不管原来开的是系统拼音还是鼠须管（Rime）这类第三方输入法，都是直接切到 U.S. 键盘
-- **不切也能用**：方向键、回车、空格、数字、⌫ 不经过输入法，只用这几个键也能做完所有操作（移动、折叠、⏎ 菜单里改状态、聚焦、导出）
-- **中文按格子宽度折行**：中文占两格，可以在任何字之间断开；英文单词不拆。窄侧栏里也不会把一行字挤乱
-- **图标用自制字体**：状态和字段图标打包成两个字体，放在 Unicode 补充私用区 B，不和中文字体抢码位；图标按文字中心对齐过，和后面的字在同一条水平线上
-- **避开终端自己的快捷键**：展开层级用 ⇧1 / ⇧2 / ⇧3。Tern、iTerm 这类终端默认拿 ⌥ 加数字切标签页，按键到不了 Claude Code
+- **Clicking into the sidebar switches to English**: clicking anywhere in the sidebar (outline tree, view bar, toolbar) switches the input method to an English keyboard. The first key you type back in the prompt switches back to your original input method; that key only does the switching and is not typed into the prompt. It uses the macOS input source API and switches straight to the U.S. keyboard whether you were on the system Pinyin or a third-party IME like Squirrel (Rime)
+- **Usable without switching**: arrow keys, Enter, Space, digits and ⌫ bypass the IME, and they alone are enough for every operation (moving, folding, changing status from the ⏎ menu, focusing, exporting)
+- **CJK wraps by cell width**: CJK characters take two cells and can break between any two characters; English words are never split. Lines stay tidy even in a narrow sidebar
+- **Icons from custom fonts**: status and field icons are packed into two fonts in the Unicode Supplementary Private Use Area-B, so they never compete with CJK fonts for code points; the icons are aligned to the text center and sit on the same baseline as the text after them
+- **Out of the way of terminal shortcuts**: expanding to a depth uses ⇧1 / ⇧2 / ⇧3. Terminals like Tern and iTerm use ⌥ plus a digit to switch tabs by default, so those keys never reach Claude Code
 
-## 用法
+## Usage
 
-### 推荐用法：以 2 号视图为主界面
+### Recommended: make view 2 your main screen
 
-平时把侧栏停在 **2 号视图「需要我做的」**（按 `2`，或者 `/outline me` 直接打开到这里）。
+Keep the sidebar on **view 2, *What I need to do*** (press `2`, or open it there directly with `/outline me`).
 
-人在这套协作里的瓶颈是 review 的注意力，2 号视图就是所有在等你的事排成的一个队列：
-- Claude 做完、等你验收的块（ToReview）；
-- 它问你的问题，比如「要我接着加吗？」；
-- 交给你自己去做的事，比如「重开终端看效果」；
-- 它卡住了要你处理的（Errored、NeedOK?、Waiting）。
+In this collaboration the human bottleneck is attention during review, and view 2 is everything waiting on you, lined up as one queue:
+- blocks Claude finished that wait for your review (ToReview);
+- questions it asks you, such as "shall I go on and add it?";
+- tasks handed to you, such as "restart the terminal to see the effect";
+- things where it got stuck and needs you (Errored, NeedOK?, Waiting).
 
-你不用读整条对话流，盯着这个队列，一条一条清掉就行。下面「回复与验收」那一组按键，都是照这个视图设计的。
+You do not need to read the whole conversation stream. Watch this queue and clear it item by item. The *Replying and reviewing* keys below are designed around this view.
 
-一次典型的来回：
+A typical round trip:
 
-1. Claude 做完一轮，2 号视图里冒出新的待验收块，和几条要你回答或去做的事。
-2. **待验收的块**：按空格展开，看「做了」下面挂的证据。行，就按 `D` 或 `Y` 通过；不行，按 `⇧R` 要改、`⇧U` 没看懂、`⇧F` 没做成（也可以按 `B` 从轻到重换）。停手 4 秒后，mod 替你发消息，Claude 接着返工、解释或追问。
-3. **问你的问题**：按 `Y` 或 `N`，停手 4 秒后作为回答发过去，Claude 照着接着做。
-4. **交给你做的事**：做完按 `D`（或 `Y`）。不单独发，等你下一条消息时一起告诉 Claude。
-5. 清完了，队列就空了。了结的事会自动折起来，不用你手动收拾。想看还没了结的全貌，按 `O` 切到「去掉 Done」这一档；被打断后回来，先看 3 号视图「我让它做的」，把当时在干什么装回脑子里。
+1. Claude finishes a turn; view 2 shows a new block waiting for review and a few things for you to answer or do.
+2. **Blocks waiting for review**: press Space to expand and look at the evidence under "done". If it is good, press `D` or `Y` to approve; if not, press `⇧R` for rework, `⇧U` if it is unclear, `⇧F` if it failed (or press `B` to step from mild to severe). 4 seconds after you stop, the mod sends a message for you, and Claude reworks, explains or asks.
+3. **Questions for you**: press `Y` or `N`; 4 seconds after you stop it goes out as your answer and Claude acts on it.
+4. **Tasks handed to you**: press `D` (or `Y`) when done. Nothing is sent on its own; Claude hears about it with your next message.
+5. Once cleared, the queue is empty. Settled items fold away on their own, with no tidying needed. To see everything still open, press `O` to reach the "hide Done" step. Coming back after an interruption, look at view 3, *What I asked it to do*, first to load what you were doing back into your head.
 
-### 命令
+### Commands
 
-- `/outline [视图]`：打开大纲面板，可以直接打开到某个视图。视图有 conclusions、me、asks、all、done、tech
-- `/outline export [视图] [路径]`：把视图导出成 Markdown 文件
-- `/agenda`：所有会话里需要我做、还没办完的事
+- `/outline [view]`: open the outline pane, optionally at a given view. Views: conclusions, me, asks, all, done, tech
+- `/outline export [view] [path]`: export a view to a Markdown file
+- `/agenda`: everything across all sessions that is waiting on me and not yet done
 
-### 视图（数字键）
+### Views (number keys)
 
-| 键 | 视图 | 看什么 |
+| Key | View | What you see |
 |---|---|---|
-| `1` | 结论 | 每一轮定下来的结论 |
-| `2` | 需要我做的 | **推荐的主界面**。等你验收的块、问你的问题、交给你做的事、卡住要你处理的；每一条可以单独改状态 |
-| `3` | 我让它做的 | 我交代的每件事：原话、做成几件、有几件有证据、还有几件等我、结论。被打断后回来先看这里 |
-| `4` | 全部 | 整棵大纲 |
-| `5` | 它已做的 | 每条「做了」和挂在下面的证据 |
-| `6` | 技术信息 | 用量、缓存命中率、耗时、模型、技能、MCP、子代理；底部是验收指标 |
+| `1` | Conclusions | The conclusion reached in each turn |
+| `2` | What I need to do | **Recommended main screen.** Blocks waiting for your review, questions for you, tasks handed to you, things stuck and waiting for you; each item can change status on its own |
+| `3` | What I asked it to do | Everything I asked for: my words, how many items got done, how many have evidence, how many still wait on me, the conclusion. Look here first after an interruption |
+| `4` | All | The whole outline |
+| `5` | What it has done | Every "done" item with its evidence underneath |
+| `6` | Technical info | Usage, cache hit rate, duration, model, skills, MCP, subagents; review metrics at the bottom |
 
-数字键的顺序可以在 `/config` 的 `views` 字段里改。
+The order of the number keys can be changed in the `views` field of `/config`.
 
-### 回复与验收
+### Replying and reviewing
 
-先点一下大纲树，键盘就交给侧栏了。这一组在 2 号视图里最常用。
+Click the outline tree once and the keyboard goes to the sidebar. These keys are used most in view 2.
 
-| 键 | 作用 |
+| Key | Action |
 |---|---|
-| 空格 | 展开 / 收起详情，看「做了」下面的证据。待验收的块展开过，就算看过证据了 |
-| `D` | Done：做完了 / 验收通过。待验收的块要先看过证据，没看过时第一下只替你展开 |
-| `Y` | Yes：回答「是」。在待验收的块上就是验收通过，和 `D` 一样 |
-| `N` | No：回答「否」 |
-| `-` | Skip：跳过这件事，不做也不用 Claude 管。不发消息，算已了结（桌面版走回车菜单） |
-| `⇧R` | Rework：方向对、细节要改。Claude 先复述要改哪几处，你确认了再动手 |
-| `⇧U` | Unclear?：没看懂它做了什么。Claude 先不改代码，拿证据解释清楚 |
-| `⇧F` | Failed：没做成。Claude 对照证据找原因返工，拿不准就追问你 |
-| `⇧S` | Suspended：先搁置。Claude 不再动它，记下做到哪了 |
-| `⇧C` | Cancelled：不做了。改过的文件列出来，问你要不要撤回 |
-| `B` | 在上面五个之间从轻到重循环：Rework → Unclear? → Failed → Suspended → Cancelled |
-| `S` | 正常流转：Todo → Doing → Done → Todo。在待验收的块上按就是通过；要打回接着做，在 `⏎` 菜单里选 Doing |
+| Space | Expand / collapse details to see the evidence under "done". Expanding a block waiting for review counts as having looked at its evidence |
+| `D` | Done: finished / review approved. A block waiting for review must have its evidence looked at first; if not, the first press only expands it for you |
+| `Y` | Yes: answer "yes". On a block waiting for review it approves, same as `D` |
+| `N` | No: answer "no" |
+| `-` | Skip: skip it, neither you nor Claude does it. No message is sent; it counts as settled (in the desktop app use the Enter menu) |
+| `⇧R` | Rework: right direction, details need changes. Claude restates what to change first and starts once you confirm |
+| `⇧U` | Unclear?: you did not follow what it did. Claude does not touch code yet and explains with the evidence |
+| `⇧F` | Failed: it did not work. Claude looks for the cause in the evidence and reworks, or asks you if unsure |
+| `⇧S` | Suspended: put it aside. Claude leaves it alone and notes how far it got |
+| `⇧C` | Cancelled: drop it. Edited files are listed and Claude asks whether to revert |
+| `B` | Cycle through the five above from mild to severe: Rework → Unclear? → Failed → Suspended → Cancelled |
+| `S` | Normal flow: Todo → Doing → Done → Todo. On a block waiting for review it approves; to send one back to keep working, pick Doing in the `⏎` menu |
 
-哪些会马上发给 Claude：
-- **马上发**（停手 4 秒后，留时间换到想要的状态）：待验收的块标成不通过或打回 Doing；问你的问题答了 Yes / No。一次打回好几件时，还会让 Claude 把互不相干的交给子代理并行做。
-- **等下一条消息一起带过去**：Done、验收通过、交给你做的事答了 Y / N。不为一句「好」单独跑一轮。
+What goes to Claude right away:
+- **Sent right away** (4 seconds after you stop, time to switch to the status you want): a block waiting for review marked as not approved or sent back to Doing; a question to you answered Yes / No. When you send back several items at once, Claude is also asked to hand independent ones to subagents in parallel.
+- **Carried with your next message**: Done, review approval, Y / N on tasks handed to you. No extra turn for a single "OK".
 
-`⇧` 加字母只在终端的树里能用（桌面版的按钮不分大小写），桌面版用 `B` 或 `⏎` 菜单。
+`⇧` plus a letter only works in the terminal tree (desktop buttons do not tell case apart); in the desktop app use `B` or the `⏎` menu.
 
-### 移动与折叠
+### Moving and folding
 
-**自动折叠**：一棵子树里的事都了结了（Done、Cancelled，或者答过 Yes / No），就自动折成一行，只留最上面那块的标题，让还没了结的事露在前面。
-- 光标在这棵子树里的时候不折；光标离开后**等 3 秒**再折，给你个缓冲，这期间回来就不折。所以刚把最后一件标成 Done，眼前的东西不会突然消失。
-- 用 `→` 或 `E` 手动打开过的块，不再自动折；`O` 切到「全部展开」、`⇧1/2/3` 指定层数时，也按你的指令来。
-- 只在「需要我做的」「我让它做的」「全部」这三个看当前进度的视图里生效。「结论」「它已做的」「技术信息」本来就是看做完的事，不折；导出也不受影响。
+**Auto-fold**: when everything in a subtree is settled (Done, Cancelled, or answered Yes / No), it folds into one line showing only the top block's title, so what is still open stays in front.
+- It does not fold while the cursor is inside the subtree; after the cursor leaves it **waits 3 seconds** before folding, and coming back within that window cancels it. So right after you mark the last item Done, nothing vanishes in front of you.
+- Blocks you opened by hand with `→` or `E` are not auto-folded again; when `O` is on "expand all" or `⇧1/2/3` sets a depth, your instruction wins.
+- It only applies in the three views that track current progress: *What I need to do*, *What I asked it to do* and *All*. *Conclusions*, *What it has done* and *Technical info* are about finished work anyway and never fold; exports are not affected.
 
-| 键 | 作用 |
+| Key | Action |
 |---|---|
-| `J` / `K` | 光标下移 / 上移（↓ / ↑ 也行） |
-| 滚轮 | 大纲比面板长时，一格翻 3 行。滚过以后窗口停在翻到的地方，光标一动再拉回光标所在的块。窗口按行截，「↑ n 行」「↓ n 行」是上下还有几行 |
-| `T` | 在子块上按：折起它的母块，光标跳到母块；再按继续往上折一层。顶层块上按：开合它自己的子块 |
-| `E` | 和 T 反过来：展开光标所在块的子块，光标跳到第一个子块；再按继续往下一层 |
-| `←` / `→` | 折叠 / 展开光标所在块的子块（`Ctrl+↑` / `Ctrl+↓` 也行） |
-| `⇧1` `⇧2` `⇧3` | 整棵大纲展开到第 1 / 2 / 3 层，更深的折起来（没被终端占用的话，⌥1 / ⌥2 / ⌥3 也行） |
-| `O` | 层级循环：只看顶层 → 全部标题 → 全部展开 → 去掉 Done。「去掉 Done」把已了结的都藏起来（Done、Cancelled、Skip，以及答过 Yes / No 的），块和「需要我做」的条目都算；藏起来的块下面还有没了结的子块时，它变暗留着当上下文 |
-| `Z` | 聚焦：只看光标所在的这一块和它的子块；再按退出 |
-| `L` / `H` | 缩进 / 反缩进：把这一块挂到上一块下面，或者提回上一层（⌥→ / ⌥← 也行）。手动改过的层级，AI 不会再动 |
+| `J` / `K` | Move the cursor down / up (↓ / ↑ also work) |
+| Scroll wheel | When the outline is taller than the pane, one notch scrolls 3 lines. After scrolling the window stays where you scrolled; moving the cursor pulls it back to the cursor's block. The window is cut by lines; "↑ n lines" and "↓ n lines" tell how many lines lie above and below |
+| `T` | On a child block: fold its parent and jump the cursor to it; press again to fold one more level up. On a top-level block: open or close its own children |
+| `E` | The reverse of T: expand the children of the cursor's block and jump to the first child; press again to go one level deeper |
+| `←` / `→` | Fold / expand the children of the cursor's block (`Ctrl+↑` / `Ctrl+↓` also work) |
+| `⇧1` `⇧2` `⇧3` | Expand the whole outline to depth 1 / 2 / 3 and fold anything deeper (⌥1 / ⌥2 / ⌥3 also work if your terminal does not take them) |
+| `O` | Cycle levels: top level only → all titles → expand all → hide Done. "Hide Done" hides everything settled (Done, Cancelled, Skip, and anything answered Yes / No), for both blocks and *What I need to do* items; a hidden block that still has open children is dimmed and kept as context |
+| `Z` | Focus: show only the cursor's block and its children; press again to leave |
+| `L` / `H` | Indent / outdent: hang this block under the previous one, or lift it back a level (⌥→ / ⌥← also work). The AI never touches a hierarchy you changed by hand |
 
-### 其他
+### Other keys
 
-| 键 | 作用 |
+| Key | Action |
 |---|---|
-| `F` | 正文折叠：把对话里这一轮的消息改成一行摘要，和侧栏里的折叠无关 |
-| `W` | 正文全折：除了最新一轮，每一轮都只留一行摘要；再按全部展开 |
-| `P` | 刷新进度：正在跑的一轮，让模型写一句做到哪了 |
-| `R` | 回顾：用大纲生成一段这场会话的回顾 |
-| `G` | 跳转：对话滚到这一块对应的那条消息 |
-| `X` | 导出：把当前视图复制成 Markdown |
-| `I` | 图例：显示所有状态和字段图标的意思 |
-| `⏎` | 弹出菜单，里面有改状态、聚焦、导出等全部操作，只用方向键和回车就能做完 |
-| `⌘/` 或 `Ctrl+/` | 和 S 一样切状态 |
+| `F` | Fold in the transcript: turn this turn's messages in the conversation into a one-line summary; unrelated to folding in the sidebar |
+| `W` | Fold the whole transcript: every turn except the latest keeps only a one-line summary; press again to expand all |
+| `P` | Refresh progress: for the turn that is running, have the model write one line on how far it got |
+| `R` | Recap: generate a recap of this session from the outline |
+| `G` | Jump: scroll the conversation to the message this block belongs to |
+| `X` | Export: copy the current view as Markdown |
+| `I` | Legend: show what every status and field icon means |
+| `⏎` | Open the menu with every action (change status, focus, export and more), usable with just the arrow keys and Enter |
+| `⌘/` or `Ctrl+/` | Change status, same as S |
 
-- 键盘分两层：先在视图栏用数字或 ←→ 选视图，⏎ 进入后光标只在这个视图的行里走，⌫ 回视图栏；在树里直接按数字也能换视图
-- 进树只能用鼠标点一下（Claude Code 不让按键把键盘交给自绘区域）。Esc 是 Claude Code 自己的，会把键盘整个还给面板，要再点一下树才回来
-- 点击只挪光标、不改状态；改状态都用键盘
+- The keyboard has two layers: pick a view in the view bar with digits or ←→, press ⏎ to enter and the cursor moves only through that view's rows, ⌫ returns to the view bar; digits in the tree switch views directly too
+- You can only enter the tree with a mouse click (Claude Code does not let a key hand the keyboard to a custom-drawn area). Esc belongs to Claude Code and returns the keyboard to the whole pane; click the tree again to come back
+- Clicking only moves the cursor and never changes status; status changes are keyboard-only
 
-### 任务状态
+### Task statuses
 
-一共 20 个，照 Obsidian 插件 todoseq 的那一套关键词、颜色和图标，另加了几个只给人用的。按 `I` 能在面板里看到每个图标。
+There are 20, following the keywords, colors and icons of the Obsidian plugin todoseq, plus a few that only humans use. Press `I` to see every icon in the pane.
 
-按「这件事现在在谁手里」分成四组。每一个状态都可以在 `⏎` 菜单里直接选；你手动改过状态的块，Claude 之后总结时不会再覆盖。
+They are grouped by "whose hands this is in right now". Every status can be picked directly from the `⏎` menu; once you change a block's status by hand, Claude's later summaries do not overwrite it.
 
-**Claude 那边，在做或者排着**
+**On Claude's side, in progress or queued**
 
-| 状态 | 意思 | 谁来标 | 之后会怎样 |
+| Status | Meaning | Who sets it | What happens next |
 |---|---|---|---|
-| Todo | 定下要做、还没开始 | 总结的模型；你按 `S` 循环到这里 | 按 `S` 变成 Doing |
-| Todo4AI | 留给 AI 之后去做的事 | 总结的模型 | — |
-| Doing | 还没做完，下一轮接着做。正在跑的那一轮也是它，图标会转 | 总结的模型；mod 在一轮开始时标 | 按 `S` 变成 Done。待验收的块在 `⏎` 菜单里选 Doing，是打回接着做，会交给 Claude |
-| Queued | 排上队了，到点自己接着跑 | 总结的模型 | — |
-| Delegated | 交给子代理或别的 Agent 在跑 | 总结的模型 | — |
-| Paused | 停在半路，被打断了，之后再接着做 | 总结的模型；一轮被你中断时 mod 兜底标 | — |
+| Todo | Decided, not started yet | The summarizing model; you, by cycling with `S` | `S` turns it into Doing |
+| Todo4AI | Left for the AI to do later | The summarizing model | — |
+| Doing | Not finished, continues next turn. The turn that is running is also Doing, with a spinning icon | The summarizing model; the mod at the start of a turn | `S` turns it into Done. Picking Doing in the `⏎` menu on a block waiting for review sends it back to Claude to keep working |
+| Queued | In the queue, will resume on schedule | The summarizing model | — |
+| Delegated | Running in a subagent or another agent | The summarizing model | — |
+| Paused | Stopped halfway, interrupted, to be resumed later | The summarizing model; the mod as a fallback when you interrupt a turn | — |
 
-**在等你（会出现在 2 号视图「需要我做的」）**
+**Waiting on you (shows up in view 2, *What I need to do*)**
 
-| 状态 | 意思 | 谁来标 | 之后会怎样 |
+| Status | Meaning | Who sets it | What happens next |
 |---|---|---|---|
-| ToReview | 做完了，等你验收 | 总结的模型；Claude 说替你办了的「需要我做」也会自动改成它，带「[自动]」 | 按 `D`、`Y` 或 `S` 通过，要先展开看过证据；不通过就标下面「你的判断」里那几个 |
-| NeedOK? | 停在等你批准、确认或选择上 | 总结的模型 | 按 `Y` / `N` 回答，马上发给 Claude |
-| Waiting | 在等你或外部的东西 | 总结的模型 | 里面的「需要我做」都了结了（你手动标完最后一条，或者后来的对话按你说的了结），块自动变 Done |
-| Errored | 出错停下了，要你处理 | mod：一轮因 API 出错结束就标，不等模型判断 | 你处理完，按 `S` 或 `D` 改掉 |
+| ToReview | Finished, waiting for your review | The summarizing model; *What I need to do* items Claude says it did for you also become this automatically, marked "[自动]" | `D`, `Y` or `S` approves, after you have looked at the evidence; if not approved, use the statuses under *Your judgment* below |
+| NeedOK? | Stopped, waiting for your approval, confirmation or choice | The summarizing model | Answer with `Y` / `N`, sent to Claude right away |
+| Waiting | Waiting on you or on something external | The summarizing model | Once every *What I need to do* item inside is settled (you mark the last one by hand, or later conversation settles it as you said), the block turns Done on its own |
+| Errored | Stopped on an error, needs you | The mod: set as soon as a turn ends on an API error, without waiting for the model | After you deal with it, change it with `S` or `D` |
 
-**Agent 那边卡住了**
+**Stuck on the agent's side**
 
-| 状态 | 意思 | 谁来标 | 之后会怎样 |
+| Status | Meaning | Who sets it | What happens next |
 |---|---|---|---|
-| Hit Limit! | 撞上额度或用量上限，等重置 | mod：一轮因 API 出错结束、回答里提到用量上限时标（看的是字，引擎不给错误种类） | 等额度恢复后接着做 |
+| Hit Limit! | Hit a quota or usage limit, waiting for the reset | The mod: set when a turn ends on an API error and the reply mentions a usage limit (it reads the words; the engine gives no error type) | Continue once the quota is back |
 
-**你的判断（验收、回答、跳过）**
+**Your judgment (review, answers, skip)**
 
-| 状态 | 意思 | 怎么标 | 之后会怎样 |
+| Status | Meaning | How to set it | What happens next |
 |---|---|---|---|
-| Rework | 方向对、细节要改 | `⇧R`，或 `B` 循环 | 只给人用。停手 4 秒后交给 Claude：先复述要改哪几处，你确认了再动手 |
-| Unclear? | 没看懂它做了什么 | `⇧U`，或 `B` 循环 | 只给人用。交给 Claude：先别改代码，拿证据解释清楚 |
-| Yes | 回答「是」，同意 | `Y` | 只给人用。问你的问题马上发给 Claude 照着做；交给你做的事等下一条消息再带过去。在待验收的块上按 `Y` 等于通过，变成 Done |
-| No | 回答「否」，不同意 | `N` | 只给人用。同上；Claude 会别照原来的打算做，不清楚就先问你 |
-| Skip | 跳过，不做也不用 Claude 管 | `-` | 只给人用。不发消息，算已了结 |
+| Rework | Right direction, details need changes | `⇧R`, or cycle with `B` | Human-only. 4 seconds after you stop it goes to Claude, which first restates what to change and starts once you confirm |
+| Unclear? | You did not follow what it did | `⇧U`, or cycle with `B` | Human-only. Goes to Claude: do not touch code yet, explain with the evidence |
+| Yes | Answer "yes", agree | `Y` | Human-only. A question to you is sent to Claude right away and it acts on it; a task handed to you rides along with your next message. `Y` on a block waiting for review approves it and makes it Done |
+| No | Answer "no", disagree | `N` | Human-only. Same as above; Claude will not go ahead with what it planned and asks you if unclear |
+| Skip | Skip it, neither you nor Claude does it | `-` | Human-only. No message is sent; it counts as settled |
 
-**结束了**
+**Finished**
 
-| 状态 | 意思 | 谁来标 | 之后会怎样 |
+| Status | Meaning | Who sets it | What happens next |
 |---|---|---|---|
-| Done | 做完了 | 总结的模型；你按 `D` 或 `S`；你在消息里说做完了的「需要我做」会自动标，带「[自动]」 | 已了结 |
-| Failed | 做了但没成功 | 总结的模型；你按 `⇧F` 或 `B` | 待验收的块标成它，会交给 Claude 返工或追问。不算已了结，不会被藏起来，因为还要返工 |
-| Suspended | 先搁置，暂时不做 | 总结的模型；你按 `⇧S` 或 `B` | 待验收的块标成它，会交给 Claude：不再动它，记下做到哪了 |
-| Cancelled | 放弃了，不做了 | 总结的模型；你按 `⇧C` 或 `B` | 已了结。待验收的块标成它，会交给 Claude 停下，改过的文件问你要不要撤回 |
+| Done | Finished | The summarizing model; you, with `D` or `S`; *What I need to do* items you said in a message you finished are set automatically, marked "[自动]" | Settled |
+| Failed | Tried, did not succeed | The summarizing model; you, with `⇧F` or `B` | On a block waiting for review it goes to Claude for rework or questions. Not settled and never hidden, since it still needs rework |
+| Suspended | Put aside for now | The summarizing model; you, with `⇧S` or `B` | On a block waiting for review it goes to Claude: leave it alone and note how far it got |
+| Cancelled | Dropped | The summarizing model; you, with `⇧C` or `B` | Settled. On a block waiting for review it goes to Claude to stop, and it asks whether to revert edited files |
 
-**几条通用规则**
+**General rules**
 
-- **已了结**：Done、Cancelled、Skip、Yes、No 这五个。整棵都是这些的子树会自动折叠；`O` 切到「去掉 Done」时会被藏起来。
-- **会马上发给 Claude 的**（停手 4 秒后）：待验收的块被标成 Rework、Unclear?、Failed、Suspended、Cancelled，或者打回 Doing；问你的问题答了 Yes / No。一次打回好几件，还会让 Claude 用子代理并行处理。
-- **等你下一条消息再一起带过去的**：其余所有手动改动，包括 Done、验收通过、Skip、交给你做的事答了 Yes / No。都是结构化的「某某：A → B」，附带每个状态的含义。
-- **只给人用的**：Rework、Unclear?、Yes、No、Skip。总结的模型不会挑这几个。
-- **Agent 报给人的**：Errored、Hit Limit!。由 mod 在一轮出错结束时自动标，不用你告诉它。
-- **「[自动]」**：后来的对话了结了等你的事，自动改的条目和块前面带这个记号；你一改状态，记号就消失。
+- **Settled**: Done, Cancelled, Skip, Yes and No. A subtree made only of these folds automatically, and is hidden when `O` is on "hide Done".
+- **Sent to Claude right away** (4 seconds after you stop): a block waiting for review marked Rework, Unclear?, Failed, Suspended or Cancelled, or sent back to Doing; a question to you answered Yes / No. When you send back several at once, Claude is also asked to handle them with subagents in parallel.
+- **Carried with your next message**: every other manual change, including Done, review approval, Skip and Y / N on tasks handed to you. Each is a structured "item: A → B" with the meaning of each status attached.
+- **Human-only**: Rework, Unclear?, Yes, No and Skip. The summarizing model never picks these.
+- **Reported by the agent to you**: Errored and Hit Limit!. The mod sets them when a turn ends on an error, so you never have to tell it.
+- **"[自动]"**: when later conversation settles something that was waiting on you, the changed items and blocks carry this mark; it disappears as soon as you change the status.
 
-## 安装
+## Install
 
-在 Claude Code 里运行：
+Run in Claude Code:
 
 ```
 /plugin install outline-sidebar --marketplace MatsuriMW/outline-sidebar
 ```
 
-图标靠 `fonts/` 里的两个字体显示（Phosphor 和 Lucide 的子集，放在 Unicode 补充私用区 B）。终端里要先安装这两个字体，再把它们加进终端字体的回退链；桌面版直接用 SVG，不需要装。字体更新后要重新安装、重开终端才会生效。
+Icons are drawn with the two fonts in `fonts/` (subsets of Phosphor and Lucide, in the Unicode Supplementary Private Use Area-B). In the terminal, install both fonts first and add them to your terminal font's fallback chain; the desktop app uses SVG directly and needs nothing. After the fonts are updated, reinstall them and restart the terminal for the change to take effect.
 
-图标按 Maple Mono 的文字中心对齐过（`tools/align_icons.py`）。换了别的终端字体、觉得图标偏上或偏下，改脚本开头的 `CENTER` 和 `HEIGHT` 再跑一遍就行。
+The icons are aligned to the text center of Maple Mono (`tools/align_icons.py`). If you use another terminal font and the icons sit too high or too low, change `CENTER` and `HEIGHT` at the top of the script and run it again.
 
-改了代码后，在 Claude Code 里运行 `/reload-plugins` 生效。
+After changing the code, run `/reload-plugins` in Claude Code.
 
-## 它会运行、发送、读写什么
+## What it runs, sends, reads and writes
 
-装之前你应该知道的，全部列在这里，源码里也都能对上：
+Everything you should know before installing is listed here, and all of it can be matched against the source:
 
-- **调用模型总结**：每一轮结束后，用 Haiku（走你自己这个 Claude Code 会话的账号和额度）总结这一轮。发过去的是：你这一轮的原话（前 2000 字）、Claude 的回答（前 4000 字）、这一轮改了哪些文件（只有文件名）、跑了哪些命令和输出的最后一行、子任务的结论，以及现有大纲的标题。按 `P` 刷新进度、按 `R` 生成回顾时也会各调一次。花掉的 token 在技术信息视图里单独记成「大纲自己的开销」。
-- **替你发消息**：验收不通过、或者按 Y / N 回答问题之后，停手 4 秒，会以 mod 的名义在这个会话里给 Claude 发一条消息；你在侧栏改过的状态，会附在你下一条消息后面带给 Claude。
-- **运行本机程序**（只在 macOS）：点进侧栏时切到英文键盘，回到对话框时切回原来的输入法。用的是 `tools/ascii-input.swift`，第一次用时用 `swiftc` 编译到 `bin/switch-input`，之后直接运行；要切回的输入法 ID 用环境变量 `ASCII_INPUT_TO` 传给它。它只调用 macOS 的输入源接口，不联网。没装 Xcode 命令行工具就跳过这一步。
-- **读的东西**：这个会话里的工具调用（文件名、命令和成没成、输出的最后一行），用来给「做了」挂证据；不读文件内容。
-- **存的东西**：每个会话的大纲存在 Claude Code 给插件的本地存储里（`~/.claude/plugins/store/`），最多留 100 个会话，`/agenda` 和跨会话的指标读的就是这些。
-- **写的东西**：只有 `/outline export` 会写文件，写到你给的路径；按 `X` 是复制到剪贴板。
-- **运行的程序**：只有三条命令，都在插件目录里运行，在 `hooks/register.tsx` 里写成固定文本：`./bin/switch-input`（切输入法）、`/bin/mkdir -p bin` 和 `/usr/bin/swiftc -O tools/ascii-input.swift -o bin/switch-input`（第一次用时编译它，每次加载最多试一次）。不运行别的命令，也不运行从网上、模型回答或工具调用里拿到的任何东西。
-- **不做的事**：不自己联网，不上报任何数据，不读任何凭证或 API key，不改 Claude Code 的权限设置，不替你执行斜杠命令，不自己调用工具。代码里出现的「token」都是指模型用量的 token 数；`www.w3.org` 是桌面版 SVG 图标的命名空间，不发请求。
+- **Calls a model to summarize**: after each turn it asks Haiku (through your own Claude Code session, on your account and quota) to summarize the turn. What gets sent: your prompt for the turn (first 2,000 characters), Claude's answer (first 4,000 characters), the files edited this turn (names only), the commands run and their last output line, subtask conclusions, and the titles of the existing outline. `P` (refresh progress) and `R` (recap) make one call each. The tokens spent are recorded separately in the technical info view as "the outline's own cost".
+- **Sends messages for you**: 4 seconds after a review is not approved, or after you answer a question with Y / N, it submits a message to Claude in this session on the mod's behalf; statuses you changed in the sidebar are attached to your next message.
+- **Runs a local program** (macOS only): it switches to the English keyboard when you click into the sidebar, and back to your original input method when you return to the prompt. This uses `tools/ascii-input.swift`, compiled with `swiftc` to `bin/switch-input` on first use and run directly after that; the ID of the input source to switch back to is passed in the `ASCII_INPUT_TO` environment variable. It only calls the macOS input source API and does not touch the network. Without the Xcode command line tools this step is skipped.
+- **What it reads**: the tool calls in this session (file names, commands and whether they succeeded, the last output line), to attach evidence to "done" items. It never reads file contents and never acts on what a tool returned.
+- **What it stores**: each session's outline, in the local storage Claude Code gives plugins (`~/.claude/plugins/store/`), up to 100 sessions; `/agenda` and the cross-session metrics read from there.
+- **What it writes**: only `/outline export` writes a file, to the path you give; `X` copies to the clipboard.
+- **What it runs**: exactly three commands, each run in the plugin folder and written as fixed text in `hooks/register.tsx`: `./bin/switch-input` (switches the input method), and `/bin/mkdir -p bin` plus `/usr/bin/swiftc -O tools/ascii-input.swift -o bin/switch-input` (builds it on first use, tried at most once per load). It runs nothing else, and nothing taken from the network, a model reply or a tool call.
+- **What it does not do**: it makes no network requests of its own (no `$.http`), sends no telemetry, reads no credentials or API keys, does not change Claude Code's permission settings, does not run slash commands for you and does not call tools itself. Every "token" in the code means a count of model usage tokens; `www.w3.org` is the namespace of the desktop app's SVG icons and is never requested.
 
-### 挂了哪些钩子
+### Hooks it registers
 
-| 钩子 | 做什么 |
+| Hook | What it does |
 |---|---|
-| `session.start` | 注册 `/outline`、`/agenda` 两个命令，从本地存档恢复这个会话的大纲，打开侧栏 |
-| `classic.SessionStart`、`classic.UserPromptSubmit` | 只读里面的会话名字（`session_title`），画在大纲最上面当标题；照常放行，不拦、不改 |
-| `command.run`（`outline`、`agenda`） | 回答这两个命令：打开面板、导出大纲、汇总待办 |
-| `command.run`（`btw`） | `/btw` 照常执行，答完以后在大纲里记一块；不改命令本身 |
-| `turn.start`、`turn.complete` | 一轮开始时建一个「进行中」的块，结束时记用量并调 Haiku 总结 |
-| `tool.call` | 记下这一轮改了哪些文件、跑了哪些命令和成没成，给「做了」挂证据；工具调用照常放行，不拦、不改 |
-| `prompt.submit` | 你发消息时，把侧栏里改过的状态作为附加上下文带给 Claude；消息正文不改 |
-| `prompt.edit` | 从侧栏回到对话框时，第一个键用来把输入法切回去 |
-| `session.append` | 记下每一轮对应的消息 id（给「跳转」和「正文折叠」用）和 Claude 这一轮写出的文字（给总结和进度用），接住 Claude Code 自带的回顾显示在侧栏顶上；对话记录本身不改 |
-| `ui.render`（`UserMessage`、`AssistantMessage`、`ToolUse`、`ToolResult`） | 正文折叠：把折起来的那一轮画成一行摘要；没折叠的照原样画。侧栏替你发给 Claude 的消息只画要点（每条事和你的回答），ctrl+o 看全文；Claude 收到的是全文，只改显示 |
-| `ui.render`（`Pane`）、`ui.message`、`ui.scroll` | 画侧栏和 Agenda 面板，接收大纲树里的按键、点击和滚轮 |
+| `session.start` | Registers the `/outline` and `/agenda` commands, restores this session's outline from local storage and opens the sidebar |
+| `classic.SessionStart`, `classic.UserPromptSubmit` | Reads only the session name (`session_title`) and draws it as the title at the top of the outline; lets the event through unchanged, never blocks or edits it |
+| `command.run` (`outline`, `agenda`) | Answers these two commands: opens the pane, exports the outline, collects open items |
+| `command.run` (`btw`) | `/btw` runs as usual; after it answers, a block is recorded in the outline. The command itself is not changed |
+| `turn.start`, `turn.complete` | Creates an "in progress" block when a turn starts; when it ends, records usage and asks Haiku to summarize |
+| `tool.call` | Records which files this turn edited and which commands ran and whether they succeeded, as evidence for "done". Every call goes through unchanged: it never blocks, rewrites or adds a call |
+| `prompt.submit` | When you send a message, attaches the statuses you changed in the sidebar as extra context for Claude; the message text is not changed |
+| `prompt.edit` | When you return from the sidebar to the prompt, the first key switches the input method back |
+| `session.append` | Records the message id of each turn (for Jump and transcript folding) and the text Claude wrote this turn (for summaries and progress), and shows Claude Code's own recap at the top of the sidebar; the transcript itself is not changed |
+| `ui.render` (`UserMessage`, `AssistantMessage`, `ToolUse`, `ToolResult`) | Transcript folding: a folded turn is drawn as a one-line summary; unfolded turns are drawn as they are. Messages the sidebar sends to Claude for you are drawn as just the key points (each item and your answer), with the full text under ctrl+o; Claude receives the full text, only the display changes |
+| `ui.render` (`Pane`), `ui.message`, `ui.scroll` | Draws the sidebar and the Agenda pane, and receives keys, clicks and scrolling in the outline tree |
 
+## License
 
-**In English.** After each turn the mod asks Haiku, through your own Claude Code session, to summarize it (your prompt up to 2,000 characters, Claude's answer up to 4,000, edited file names, commands with their last output line, subtask conclusions and the outline's titles); `P` and `R` make one call each. After a review verdict or a Y / N answer it submits a message to Claude in the session, and attaches your sidebar status changes to your next message. On macOS it switches the input source to the US keyboard when you click into the sidebar and back when you return to the prompt, so letter keys reach the outline instead of a Chinese IME.
-
-What it runs: exactly three commands, each written as fixed text in `hooks/register.tsx` and run with the plugin's own folder as the working directory: `./bin/switch-input` (switches the input source; the source to switch back to is passed in the `ASCII_INPUT_TO` environment variable), and, on first use only, `/bin/mkdir -p bin` and `/usr/bin/swiftc -O tools/ascii-input.swift -o bin/switch-input` to build it from the Swift source in this repository (tried at most once per load). It runs nothing else, and nothing taken from the network, a model reply or a tool call.
-
-What it fetches: nothing. It makes no network requests of its own (no `$.http`), sends no telemetry, and reads no credentials. The only outbound traffic is the Haiku summaries above, sent through your own Claude Code session.
-
-What the `tool.call` hook does with the calls it sees: it lets every call through unchanged (never blocks, rewrites or adds a call), and after the call returns it records the tool's name (and which skills and MCP tools were used), the edited file names, the commands run with whether they succeeded and their last output line, as evidence for the turn's outline block. It never reads file contents and never acts on what a tool returned. It stores each session's outline in Claude Code's local plugin store, up to 100 sessions, and writes a file only on `/outline export`.
-
-## 许可证
-
-代码用 MIT 许可证，见 [LICENSE](LICENSE)。`fonts/` 里的图标字体和代码里的图标路径取自 Phosphor Icons（MIT）和 Lucide（ISC），保留各自的许可证，见 [fonts/LICENSES.md](fonts/LICENSES.md)。
+The code is under the MIT license, see [LICENSE](LICENSE). The icon fonts in `fonts/` and the icon paths in the code come from Phosphor Icons (MIT) and Lucide (ISC) and keep their own licenses, see [fonts/LICENSES.md](fonts/LICENSES.md).
