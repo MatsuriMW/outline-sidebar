@@ -56,8 +56,9 @@ const TreeView: ClientModule<TreeProps, State> = (props, surface) => {
   const menu = surface.state?.menu ?? null
   const frame = surface.state?.frame ?? 0
   const isMenuOpen = scope === 'tree' && menu !== null && at >= 0 && menuItems.length > 0
-  // 留两行给「上面 / 下面还有几行」
-  const room = Math.max(3, props.height - 2)
+  const picked = rows.filter(r => r.isSelected === true).length
+  // 留两行给「上面 / 下面还有几行」，多选时再留一行说选了几行
+  const room = Math.max(3, props.height - 2 - (picked > 0 ? 1 : 0))
   hasSpinning = rows.some(r => r.isSpinning)
 
   // 先把所有块摊成一行一行：块之间的空行、标题的每个折行、每个字段行，光标那块下面的菜单
@@ -89,7 +90,7 @@ const TreeView: ClientModule<TreeProps, State> = (props, surface) => {
               <Text dimColor>{padTo(row.cont, headWidth(row))}</Text>
             </Box>
           )}
-          <Text dimColor={row.isContext || row.isClosed} strikethrough={row.isCanceled} bold={(row.isAt && scope === 'tree') || (row.isOpen && !row.isContext)} color={row.badge?.color}>
+          <Text dimColor={row.isContext || row.isClosed} strikethrough={row.isCanceled} bold={(row.isAt && scope === 'tree') || (row.isOpen && !row.isContext)} color={row.badge?.color} inverse={row.isSelected === true}>
             {part}
           </Text>
         </Box>,
@@ -196,7 +197,7 @@ const TreeView: ClientModule<TreeProps, State> = (props, surface) => {
 
   surface.onPointer(event => {
     if (event.type !== 'down') return
-    const y = event.y - (top > 0 ? 1 : 0)
+    const y = event.y - (top > 0 ? 1 : 0) - (picked > 0 ? 1 : 0)
     for (const f of shown) {
       const at = f.start - top
       if (y < at || y >= at + f.height) continue
@@ -217,6 +218,7 @@ const TreeView: ClientModule<TreeProps, State> = (props, surface) => {
 
   return (
     <Box flexDirection="column">
+      {picked > 0 && <Text color="claude">已选 {String(picked)} 行 · 改状态一起改 · 不按 ⇧ 直接 ↑↓ 取消</Text>}
       {top > 0 && <Text dimColor>  ↑ {String(top)} 行</Text>}
       {props.empty !== undefined && <Text dimColor>{props.empty}</Text>}
       {shown.map(f => f.node)}

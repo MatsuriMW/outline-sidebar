@@ -34,7 +34,7 @@ A long Claude Code session is the easiest place to shred it. The conversation is
 
 A Claude Code mod that turns a session into a collapsible, Logseq-style outline sidebar. Each turn is a block; going deeper into the same topic makes a child block, and a new topic starts a new top-level block. The AI drafts the hierarchy and you correct it by hand in the sidebar.
 
-> **Use it in the terminal (the Claude Code CLI).** Only the terminal is polished so far. The desktop app and VS Code can open it, but it falls back to plain buttons, and keyboard control, icons and CJK layout have not been tuned there. Desktop support comes later.
+> **Use it in the terminal (the Claude Code CLI).** The terminal version is the most complete. The sidebar in the Claude desktop app has its own tuned layout and works well with a mouse, but keyboard control is still terminal-first; VS Code can open it but has not been tuned.
 
 It is my take on harness engineering. Most harnesses work on the agent's side: what context it gets, which tools, how its output is verified. This mod works on the human side: how a person sees clearly what the agent did, and how that person's judgment gets back to the agent reliably.
 
@@ -92,7 +92,14 @@ What it does not do: it does not constrain the agent. Guardrails, permissions, t
 
 ## Built for the terminal and CJK input methods
 
-It is tuned for the **terminal** version of Claude Code: keyboard control, icon fonts and CJK layout are all adjusted for the terminal. The desktop app and VS Code work too, but fall back to plain buttons and are fairly bare; client versions come later.
+It is tuned mainly for the **terminal** version of Claude Code: keyboard control, icon fonts and CJK layout are all adjusted for the terminal. The desktop app uses native buttons and SVG icons: blocks indent by level, statuses sit in their own column so titles line up, the current view is a filled button, the cursor row is shaded, hovering a row floats a small "Done / 原文" toolbar, and less common actions live in a "更多操作" dropdown. VS Code works too but has not been tuned.
+
+<p align="center">
+  <img src="docs/desktop-me.png" width="49%" alt="Desktop app, view 2: the cursor row is shaded and a hovered row floats Done / 原文">
+  <img src="docs/desktop-all.png" width="49%" alt="Desktop app, view 4: blocks indented by level, statuses in their own column">
+</p>
+
+> The sidebar in the Claude desktop app (light theme). Left: view 2, *What I need to do*, with the cursor on the first block and the pointer over "界面文字要不要改成中文？", which floats the Done / 原文 buttons. Right: view 4, *All*, for the same session.
 
 In the terminal, keyboard shortcuts and Chinese input methods get in each other's way: letter keys like J/K, T and S are grabbed by the IME to compose characters, never reach the sidebar, and just pop up a candidate window. Almost every Chinese user has Pinyin or Squirrel (Rime) on, so a few things are handled specifically:
 
@@ -166,7 +173,18 @@ What goes to Claude right away:
 - **Sent right away** (4 seconds after you stop, time to switch to the status you want): a block waiting for review marked as not approved or sent back to Doing; a question to you answered Yes / No. When you send back several items at once, Claude is also asked to hand independent ones to subagents in parallel.
 - **Carried with your next message**: Done, review approval, Y / N on tasks handed to you. No extra turn for a single "OK".
 
-`⇧` plus a letter only works in the terminal tree (desktop buttons do not tell case apart); in the desktop app use `B` or the `⏎` menu.
+`⇧` plus a letter only works in the terminal tree (desktop buttons do not tell case apart); in the desktop app use "负面状态" in the "更多操作" dropdown.
+
+### Multi-select, search, bulk cleanup
+
+| Key | What it does |
+|---|---|
+| `⇧↓` / `⇧↑` | Multi-select: extend a range down / up from the cursor row; the top of the tree says how many rows are selected. Any status key above (`D` `Y` `N` `-` `S` `B` `⇧R`…, or a status in the `⏎` menu) then changes every selected row; dimmed ancestors shown only for context are left out. Plain ↑↓, a click or switching views clears the selection |
+| `Q` or `/` | Search: a search box appears under the toolbar and filters as you type. Blocks whose title, your words, did, conclusion, questions or "needs me" items contain the text stay visible, ancestors kept as context, on top of the view filter. If clicking the tree switched you to the English keyboard, opening search switches back to your input method so you can type CJK. Submit an empty box to close it |
+
+**Stale block prompt**: when 5 or more blocks are still open (blocks waiting for review excluded), 10 or more turns old, and you never changed their status by hand, a line appears under the toolbar: "全部 Done" marks them all Done, "不用" stops prompting for those blocks. The changes are carried to Claude with your next message like any other. Blocks waiting for review are left out because they need you to look at the evidence before Done.
+
+Multi-select is terminal-only for now. Esc belongs to Claude Code and never reaches the sidebar, so plain ↑↓ is how you clear a selection.
 
 ### Moving and folding
 
@@ -191,11 +209,10 @@ What goes to Claude right away:
 
 | Key | Action |
 |---|---|
-| `F` | Fold in the transcript: turn this turn's messages in the conversation into a one-line summary; unrelated to folding in the sidebar |
-| `W` | Fold the whole transcript: every turn except the latest keeps only a one-line summary; press again to expand all |
 | `P` | Refresh progress: for the turn that is running, have the model write one line on how far it got |
 | `R` | Recap: generate a recap of this session from the outline |
-| `G` | Jump: scroll the conversation to the message this block belongs to |
+| `G` | Jump to the source: scroll the chat to where the cursor row came from. A block jumps to your message; a "needs me" item jumps to Claude's answer in that turn, for when you need the context to understand what it is asking |
+| `]` / `[` | Walk the chat by outline level: move the cursor to the next / previous block at the same level and scroll the chat there; at the end of a level it goes on to the next block one level up. Press `⇧1` first to keep only top-level topics and page through a long session topic by topic |
 | `X` | Export: copy the current view as Markdown |
 | `I` | Legend: show what every status and field icon means |
 | `⏎` | Open the menu with every action (change status, focus, export and more), usable with just the arrow keys and Enter |
@@ -304,8 +321,7 @@ Everything you should know before installing is listed here, and all of it can b
 | `tool.call` | Records which files this turn edited and which commands ran and whether they succeeded, as evidence for "done". Every call goes through unchanged: it never blocks, rewrites or adds a call |
 | `prompt.submit` | When you send a message, attaches the statuses you changed in the sidebar as extra context for Claude; the message text is not changed |
 | `prompt.edit` | When you return from the sidebar to the prompt, the first key switches the input method back |
-| `session.append` | Records the message id of each turn (for Jump and transcript folding) and the text Claude wrote this turn (for summaries and progress), and shows Claude Code's own recap at the top of the sidebar; the transcript itself is not changed |
-| `ui.render` (`UserMessage`, `AssistantMessage`, `ToolUse`, `ToolResult`) | Transcript folding: a folded turn is drawn as a one-line summary; unfolded turns are drawn as they are. Messages the sidebar sends to Claude for you are drawn as just the key points (each item and your answer), with the full text under ctrl+o; Claude receives the full text, only the display changes |
+| `session.append` | Records the ids of your message and of the last answer in each turn (for Jump to source) and the text Claude wrote this turn (for summaries and progress), and shows Claude Code's own recap at the top of the sidebar; the transcript itself is not changed |
 | `ui.render` (`Pane`), `ui.message`, `ui.scroll` | Draws the sidebar and the Agenda pane, and receives keys, clicks and scrolling in the outline tree |
 
 ## License

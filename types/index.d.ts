@@ -79,8 +79,8 @@ export type Block = {
   resolvedIn?: number
   /** 我那条消息在对话里的 id，用来跳转 */
   messageId?: string
-  /** 这一轮在对话里的助手消息和工具调用行，正文折叠时藏起来 */
-  rowIds?: string[]
+  /** 这一轮最后一条带文字的回答在对话里的 id：「需要我做」的条目按 G 跳到这里看原文 */
+  answerId?: string
   tech?: Tech
   /** 这一轮还没结束时的实时进度；结束后去掉 */
   live?: Live
@@ -126,9 +126,6 @@ export type View = 'all' | 'me' | 'asks' | 'done' | 'conclusions' | 'tech'
 
 export type Level = 'overview' | 'contents' | 'all' | 'undone'
 
-/** 正文折叠：我那条消息改画成一行摘要，这一轮其余的行藏起来 */
-export type Body = { labels: Record<string, string>; hide: string[] }
-
 /** 回顾：Claude Code 自带的 recap（claude），或大纲自己生成的（outline） */
 export type Recap = { text: string; source: 'claude' | 'outline'; at: number; isPending?: boolean }
 
@@ -156,13 +153,17 @@ declare module 'claude-code' {
       view: View
       level: Level
       cursor: string | null
+      /** 多选的起点：⇧↑ / ⇧↓ 从这里拉到光标，中间的行都算选中；null 是没在多选 */
+      anchor: string | null
+      /** 搜索的关键词，空串是没在搜 */
+      query: string
+      /** 搜索框露出来了（按 / 打开，清空后回车收起） */
+      searching: boolean
+      /** 「长期没动」的提示里我点过「不用」的块，不再为它们提示 */
+      staleSkipped: string[]
       zoom: string | null
       /** 我手动纠正层级的次数，用来评估 AI 判断的准确率 */
       corrections: number
-      /** 正文里折起来的块（全折模式下是例外：这些块展开） */
-      bodyFolded: string[]
-      bodyFoldAll: boolean
-      body: Body
       agenda: AgendaGroup[]
       /** 最近一次回顾，显示在面板顶部 */
       recap: Recap | null

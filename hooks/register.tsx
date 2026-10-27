@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { Elements, EngineInterface, Register } from 'claude-code'
 
-import type { AgendaGroup, Block, Body, Evidence, Kind, Level, Metrics, Recap, Resolution, Status, StatusChange, Tech, View } from '../types'
+import type { AgendaGroup, Block, Evidence, Kind, Level, Metrics, Recap, Resolution, Status, StatusChange, Tech, View } from '../types'
 import type { Field, Line, MenuItem, TreeProps } from './outline'
 import { PH, PH_SVG } from './icons'
 import type { PhosphorIcon } from './icons'
@@ -23,6 +23,9 @@ import {
   parseKey,
   FIELD,
   ITEM_MARK,
+  UNTITLED,
+  STALE_MIN,
+  STALE_TURNS,
   normalizeStatus,
   statusText,
   VIEW_INFO,
@@ -31,10 +34,11 @@ import {
   childrenOf,
   clip,
   estimateWrappedRows,
-  compactSentText,
   isOpenStatus,
+  jumpTarget,
   matches,
   parseKeys,
+  staleBlocks,
   sumTech,
   techLines,
   type AutoFold,
@@ -65,11 +69,12 @@ const open = atom({ plugin: 'outline-sidebar', key: 'open' } as const, [])
 const view = atom({ plugin: 'outline-sidebar', key: 'view' } as const, 'all')
 const level = atom({ plugin: 'outline-sidebar', key: 'level' } as const, 'contents')
 const cursor = atom({ plugin: 'outline-sidebar', key: 'cursor' } as const, null)
+const anchor = atom({ plugin: 'outline-sidebar', key: 'anchor' } as const, null)
+const query = atom({ plugin: 'outline-sidebar', key: 'query' } as const, '')
+const searching = atom({ plugin: 'outline-sidebar', key: 'searching' } as const, false)
+const staleSkipped = atom({ plugin: 'outline-sidebar', key: 'staleSkipped' } as const, [])
 const zoom = atom({ plugin: 'outline-sidebar', key: 'zoom' } as const, null)
 const corrections = atom({ plugin: 'outline-sidebar', key: 'corrections' } as const, 0)
-const bodyFolded = atom({ plugin: 'outline-sidebar', key: 'bodyFolded' } as const, [])
-const bodyFoldAll = atom({ plugin: 'outline-sidebar', key: 'bodyFoldAll' } as const, false)
-const body = atom({ plugin: 'outline-sidebar', key: 'body' } as const, { labels: {}, hide: [] })
 const agenda = atom({ plugin: 'outline-sidebar', key: 'agenda' } as const, [])
 const recap = atom({ plugin: 'outline-sidebar', key: 'recap' } as const, null)
 const legend = atom({ plugin: 'outline-sidebar', key: 'legend' } as const, false)
@@ -101,21 +106,23 @@ const ACTIONS: { key: string; hotkey: string; label: string }[] = [
   { key: 'status-bad', hotkey: 'b', label: '负面状态' },
   { key: 'level', hotkey: 'o', label: '层级' },
   { key: 'zoom', hotkey: 'z', label: '聚焦' },
-  { key: 'body', hotkey: 'f', label: '正文折叠' },
-  { key: 'body-all', hotkey: 'w', label: '正文全折' },
   { key: 'progress', hotkey: 'p', label: '刷新进度' },
   { key: 'recap', hotkey: 'r', label: '回顾' },
-  { key: 'jump', hotkey: 'g', label: '跳转' },
+  { key: 'jump', hotkey: 'g', label: '跳到原文' },
   { key: 'export', hotkey: 'x', label: '导出' },
   { key: 'legend', hotkey: 'i', label: '图例' },
+  // 树里按 / 也行（Button 的 hotkey 只认数字和字母，/ 由树自己接）
+  { key: 'search', hotkey: 'q', label: '搜索' },
 ]
+
+/** 搜索框的 key */
+const SEARCH = 'search'
 
 /** 视图名，「需要我做的」后面带还剩几件 */
 const viewLabel = (one: View, waiting: number) => `${VIEW_INFO[one].label}${one === 'me' && waiting > 0 ? ` ${waiting}` : ''}`
 
-/** 聚焦时「聚焦」变「退出聚焦」，正文全折时「正文全折」变「正文全开」 */
-const actionLabel = (a: (typeof ACTIONS)[number], isZoomed: boolean, isBodyAll: boolean) =>
-  a.key === 'zoom' && isZoomed ? '退出聚焦' : a.key === 'body-all' && isBodyAll ? '正文全开' : a.label
+/** 聚焦时「聚焦」变「退出聚焦」 */
+const actionLabel = (a: (typeof ACTIONS)[number], isZoomed: boolean) => (a.key === 'zoom' && isZoomed ? '退出聚焦' : a.label)
 
 /** 图例里列出的字段 */
 const LEGEND_FIELDS = ['needsMe', 'did', 'proof', 'files', 'conclusion', 'question', 'resolved', 'ask', 'live', 'last', 'note', 'stats', 'tokens', 'cache', 'time', 'model', 'skills', 'mcp', 'slash', 'agents', 'outline', 'coverage', 'review', 'reopen', 'fix'] as const
@@ -139,12 +146,28 @@ const phosphorSvg = (field: Field, color: string) => {
 
 const ICON_PX = 14
 
+/** 桌面版工具栏上直接摆出来的几个，其余进「更多操作」下拉框 */
+const DESK_ACTIONS = ['done', 'yes', 'no', 'jump', 'search']
+
+/** 桌面版状态那一列的宽度（格）：最长的 Hit Limit! 连图标也放得下，后面的标题才对得齐 */
+const DESK_STATUS_COL = 12
+
+/** 桌面版每深一层缩进几格（不画终端那套 │ ├─ 引导线：比例字体下竖线对不齐） */
+const DESK_INDENT = 2
+
+/** 桌面版的标题和字段：中文字之间插零宽空格，一长串中文才折得了行（桌面版对整串中文不断行，超出面板的部分被截掉） */
+const breakable = (text: string) => text.replace(/([\u2e80-\ua4cf\uac00-\ud7a3\uf900-\ufaff\uff00-\uffef])(?=[\u2e80-\ua4cf\uac00-\ud7a3\uf900-\ufaff\uff00-\uffef])/g, '$1\u200b')
+
+/** 桌面版行的底色：光标所在行、鼠标悬停的行。半透明灰，深浅色主题下都看得出又不抢眼 */
+const DESK_CURSOR_BG = 'rgba(127, 127, 127, 0.16)'
+const DESK_HOVER_BG = 'rgba(127, 127, 127, 0.08)'
+
 type DesktopEls = Elements['desktop']
 
 /** 桌面版一行：每段「图标 字」 */
-function desktopLine(els: DesktopEls, line: Line) {
+function desktopLine(els: DesktopEls, line: Line, isDesktop: boolean) {
   const { Box, Text, Svg } = els
-  const props = { line }
+  const props = { line, isDesktop }
   const color = line.color === undefined ? '#8a8f98' : line.color === 'claude' ? '#c8635f' : line.color === 'warning' ? '#b39a3e' : line.color
   return (
     <Box flexDirection="row" columnGap={1} flexWrap="wrap">
@@ -153,7 +176,7 @@ function desktopLine(els: DesktopEls, line: Line) {
         return (
           <Box flexDirection="row" columnGap={1}>
             {svg === undefined ? <Text>{glyph(part.field)}</Text> : <Svg source={svg} alt={FIELD[part.field].label} width={ICON_PX} height={ICON_PX} />}
-            {part.text !== '' && <Text color={props.line.color} dimColor={props.line.color === undefined}>{part.text}</Text>}
+            {part.text !== '' && <Text color={props.line.color} dimColor={props.line.color === undefined}>{props.isDesktop ? breakable(part.text) : part.text}</Text>}
           </Box>
         )
       })}
@@ -170,7 +193,7 @@ function desktopStatus(els: DesktopEls, status: Status, isFire: boolean, isConte
   return (
     <Box flexDirection="row" columnGap={1}>
       <Svg source={statusSvg(props.status, props.isFire)} alt={info.label} width={ICON_PX} height={ICON_PX} {...(isAnimated ? { isInteractive: true } : {})} />
-      <Text color={info.color} bold={isOpenStatus(props.status)} dimColor={props.isContext === true}>{info.label}</Text>
+      <Text color={info.color} size="footnote" weight={isOpenStatus(props.status) ? 'semibold' : 'regular'} dimColor={props.isContext === true}>{info.label}</Text>
     </Box>
   )
 }
@@ -185,7 +208,6 @@ type Turn = {
   turnId: string
   text: string
   messageId?: string
-  rowIds: string[]
   files: Set<string>
   commands: string[]
   slash: string[]
@@ -200,6 +222,8 @@ type Turn = {
   steps: string[]
   /** Claude Code 到目前为止写出的文字 */
   texts: string[]
+  /** 最后一条带文字的回答的 id */
+  answerId?: string
   /** 改了的文件、跑了的命令和结果，给「做了」挂证据 */
   evidence: Evidence[]
 }
@@ -271,7 +295,6 @@ async function persist($: EngineInterface) {
 async function setBlocks($: EngineInterface, change: (list: Block[]) => Block[]) {
   await update($, blocks, list => change(list ?? []))
   await persist($)
-  await refreshBody($)
 }
 
 async function restore($: EngineInterface) {
@@ -287,50 +310,6 @@ async function restore($: EngineInterface) {
   if (existing.some(b => !(STATUSES as string[]).includes(b.status))) {
     await update($, blocks, all => (all ?? []).map(b => ({ ...b, status: normalizeStatus(String(b.status)) })))
   }
-}
-
-// ---------- 正文折叠 ----------
-
-/** 按折叠设置算出：哪些消息改画成一行摘要，哪些行藏起来 */
-async function refreshBody($: EngineInterface) {
-  const list = await read($, blocks)
-  const isAll = await read($, bodyFoldAll)
-  const toggled = await read($, bodyFolded)
-  const turns = list.filter(b => b.kind === 'turn')
-  const last = turns.at(-1)?.id
-  const computed: Body = { labels: {}, hide: [] }
-  for (const b of turns) {
-    if (b.messageId === undefined || b.isPending) continue
-    // 全折模式下，最新一轮默认不折，toggled 里的是例外
-    const isFolded = isAll ? b.id !== last !== toggled.includes(b.id) : toggled.includes(b.id)
-    if (!isFolded) continue
-    const open = b.needsMe.filter((_, i) => isOpenStatus(itemStatus(b, i)))
-    const waiting = open.length > 0 ? `  需要我做：${open.join('；')}` : ''
-    computed.labels[b.messageId] = `▸ ${STATUS_INFO[b.status].label}  ${b.title}${waiting}`
-    computed.hide.push(...(b.rowIds ?? []))
-  }
-  await update($, body, () => computed)
-}
-
-async function toggleBodyFold($: EngineInterface) {
-  const id = await cursorBlockId($)
-  const b = (await read($, blocks)).find(one => one.id === id)
-  // 子任务和 btw 跟着它所在那一轮
-  const turnId = b?.kind === 'turn' ? b.id : b?.parent ?? undefined
-  if (turnId === undefined) return
-  await update($, bodyFolded, ids => toggle(ids, turnId))
-  await refreshBody($)
-}
-
-async function toggleBodyFoldAll($: EngineInterface) {
-  await update($, bodyFoldAll, isOn => !isOn)
-  await update($, bodyFolded, () => [])
-  await refreshBody($)
-}
-
-async function hideRow($: EngineInterface, requestId: string, isExpanded: boolean | undefined) {
-  if (isExpanded === true) return false
-  return (await read($, body)).hide.includes(requestId)
 }
 
 // ---------- 总结 ----------
@@ -503,7 +482,34 @@ const toggle = (list: readonly string[] | undefined, id: string) =>
   (list ?? []).includes(id) ? (list ?? []).filter(one => one !== id) : [...(list ?? []), id]
 
 async function currentRows($: EngineInterface) {
-  return visibleRows(await read($, blocks), await read($, view), await read($, folded), await read($, zoom), await read($, open), await isHidingDone($), await autoFold($))
+  return visibleRows(await read($, blocks), await read($, view), await read($, folded), await read($, zoom), await read($, open), await isHidingDone($), await autoFold($), await read($, query))
+}
+
+// ---------- 多选 ----------
+
+/** 多选的行：从起点拉到光标（看得见的行里），只当上下文露出来的祖先不算；没在多选、或者只选了一行，就是空的 */
+async function selectedKeys($: EngineInterface) {
+  const from = await read($, anchor)
+  if (from === null) return []
+  const rows = await currentRows($)
+  const to = await read($, cursor)
+  const a = rows.findIndex(r => r.key === from)
+  const b = rows.findIndex(r => r.key === to)
+  if (a < 0 || b < 0 || a === b) return []
+  return rows.slice(Math.min(a, b), Math.max(a, b) + 1).filter(r => !r.isContext).map(r => r.key)
+}
+
+/** ⇧↑ / ⇧↓：从光标所在行起，往上或往下多选一行 */
+async function extendSelection($: EngineInterface, step: number) {
+  if ((await read($, anchor)) === null) {
+    const at = await read($, cursor)
+    await update($, anchor, () => at)
+  }
+  await moveCursor($, step)
+}
+
+async function clearSelection($: EngineInterface) {
+  if ((await read($, anchor)) !== null) await update($, anchor, () => null)
 }
 
 // ---------- 自动折叠 ----------
@@ -574,6 +580,7 @@ async function keepCursorInView($: EngineInterface) {
 
 async function switchView($: EngineInterface, v: View) {
   await update($, view, () => v)
+  await clearSelection($)
   await keepCursorInView($)
   if (v === 'tech') await measureAll($)
 }
@@ -647,6 +654,7 @@ async function switchToAscii($: EngineInterface) {
 
 async function pick($: EngineInterface, key: string) {
   await update($, scope, () => 'tree')
+  await clearSelection($)
   const { blockId, index } = parseKey(key)
   // 点块：第二下展开详情。点只挪光标，不改状态，改状态用 S
   if ((await read($, cursor)) === key) {
@@ -756,10 +764,14 @@ async function reparent($: EngineInterface, direction: 'in' | 'out') {
   if (isChanged) await update($, corrections, n => (n ?? 0) + 1)
 }
 
-/** 改光标所在那一行的状态：块，或者「需要我做」的某一条 */
+/** 改光标所在那一行的状态：块，或者「需要我做」的某一条；多选时选中的每一行各按自己的状态改 */
 async function changeStatus($: EngineInterface, choose: (current: Status) => Status) {
+  const picked = await selectedKeys($)
   const key = await read($, cursor)
-  if (key === null) return
+  for (const one of picked.length > 0 ? picked : key === null ? [] : [key]) await changeRow($, one, choose)
+}
+
+async function changeRow($: EngineInterface, key: string, choose: (current: Status) => Status) {
   const { blockId, index } = parseKey(key)
   const now = await $.clock.now()
   const target = (await read($, blocks)).find(b => b.id === blockId)
@@ -908,14 +920,14 @@ async function toggleLegend($: EngineInterface) {
 /** 回车弹出的菜单：只用方向键和回车就能做完所有操作 */
 const statusMenu = (): MenuItem[] => STATUSES.map(st => ({ id: `status:${st}`, label: statusText(st), color: STATUS_INFO[st].color }))
 
-const menuFor = (lvl: Level, isZoomed: boolean, isBodyAll: boolean): MenuItem[] => [
+const menuFor = (lvl: Level, isZoomed: boolean): MenuItem[] => [
   { id: 'detail', label: '详情' },
   ...statusMenu(),
   { id: 'fold', label: '折叠子块' },
   { id: 'zoom', label: isZoomed ? '退出聚焦' : '聚焦这一块' },
-  { id: 'body', label: '正文里折叠这一轮' },
-  { id: 'body-all', label: isBodyAll ? '正文全部展开' : '正文全折' },
-  { id: 'jump', label: '跳到对话' },
+  { id: 'jump', label: '跳到原文' },
+  { id: 'next-sibling', label: '下一个同级，跳到原文（]）' },
+  { id: 'prev-sibling', label: '上一个同级，跳到原文（[）' },
   { id: 'progress', label: '刷新进度' },
   { id: 'recap', label: '回顾' },
   { id: 'level', label: `全局层级：${LEVEL_LABEL[LEVELS[(LEVELS.indexOf(lvl) + 1) % LEVELS.length]!]}` },
@@ -973,17 +985,76 @@ async function exportView($: EngineInterface, v: View, path?: string) {
     : `复制失败（${copied.reason}），可以用 /outline export ${v} <文件路径> 存成文件`
 }
 
+/** G：对话滚到光标这一行的原文（跳到哪条见 jumpTarget） */
 async function jump($: EngineInterface) {
+  const key = await read($, cursor)
+  const target = key === null ? undefined : jumpTarget(await read($, blocks), key)
+  if (target === undefined) return
+  await $.ui.scroll({ to: { requestId: target }, block: 'start' })
+}
+
+/**
+ * ] / [：光标挪到下一个 / 上一个同级的块，对话跟着跳到它的原文。这一层走完了就到上一层的下一块，
+ * 所以先 ⇧1 只留顶层，就能一个话题一个话题地往下翻；折起来的子块跳过
+ */
+async function stepLevel($: EngineInterface, step: number) {
+  const rows = await currentRows($)
   const id = await cursorBlockId($)
-  const b = (await read($, blocks)).find(one => one.id === id)
-  const messageId = b?.kind === 'turn' ? b.messageId : (await read($, blocks)).find(one => one.id === b?.parent)?.messageId
-  if (messageId === undefined) return
-  await $.ui.scroll({ to: { requestId: messageId }, block: 'start' })
+  const at = rows.findIndex(r => r.key === id)
+  if (at < 0) return
+  const depth = rows[at]!.depth
+  for (let i = at + step; i >= 0 && i < rows.length; i += step) {
+    const row = rows[i]!
+    if (row.item !== undefined || row.depth > depth) continue
+    await clearSelection($)
+    await setCursor($, row.key)
+    return jump($)
+  }
+}
+
+// ---------- 搜索 ----------
+
+/** /：露出搜索框，焦点交过去。点树时切成了英文键盘的，切回原来的输入法，好打中文 */
+async function openSearch($: EngineInterface) {
+  await update($, searching, () => true)
+  const back = restoreInput
+  if (back !== undefined) {
+    restoreInput = undefined
+    void $.process.run(['./bin/switch-input'], { cwd: $.plugin.root, env: { ASCII_INPUT_TO: back }, timeoutMs: 3000 }).catch(() => undefined)
+  }
+  // 搜索框要等下一次画面板才有，放到这次处理之外去等
+  $.clock.after(0, () => void $.ui.focus({ requestId: PANE, key: SEARCH }))
+}
+
+/** 边打边搜：命中的块露出来，祖先留着当上下文 */
+async function setQuery($: EngineInterface, text: string) {
+  await update($, query, () => text)
+  await clearSelection($)
+  await keepCursorInView($)
+}
+
+/** 回车：有字就留着这次搜索；清空了回车就收起搜索框 */
+async function submitSearch($: EngineInterface, text: string) {
+  await setQuery($, text.trim() === '' ? '' : text)
+  if (text.trim() === '') await update($, searching, () => false)
+}
+
+// ---------- 长期没动的块：提示一键 Done ----------
+
+async function doneStale($: EngineInterface, ids: readonly string[]) {
+  for (const id of ids) await changeRow($, id, () => 'DONE')
+}
+
+async function skipStale($: EngineInterface, ids: readonly string[]) {
+  await update($, staleSkipped, list => [...new Set([...(list ?? []), ...ids])])
 }
 
 async function runAction($: EngineInterface, action: string) {
-  if (action === 'down') return moveCursor($, 1)
-  if (action === 'up') return moveCursor($, -1)
+  if (action === 'down' || action === 'up') {
+    await clearSelection($)
+    return moveCursor($, action === 'down' ? 1 : -1)
+  }
+  if (action === SEARCH) return openSearch($)
   if (action === 'fold') return toggleFold($)
   if (action === 'fold-up') return foldUp($)
   if (action === 'unfold-down') return unfoldDown($)
@@ -998,9 +1069,8 @@ async function runAction($: EngineInterface, action: string) {
   if (action === 'no') return setStatus($, 'NO')
   if (action === 'level') return cycleLevel($)
   if (action === 'zoom') return toggleZoom($)
-  if (action === 'body') return toggleBodyFold($)
-  if (action === 'body-all') return toggleBodyFoldAll($)
   if (action === 'jump') return jump($)
+  if (action === 'next-sibling' || action === 'prev-sibling') return stepLevel($, action === 'next-sibling' ? 1 : -1)
   if (action === 'export') {
     await exportView($, await read($, view))
     return
@@ -1034,8 +1104,15 @@ async function handleKey($: EngineInterface, k: KeyMessage, keys: readonly View[
   // 缩进照 Org 的 ⌥→ / ⌥←
   if ((k.key === 'left' || k.key === 'right') && k.meta) return reparent($, k.key === 'right' ? 'in' : 'out')
   if ((isUp || isDown) && k.ctrl) return toggleFold($, isUp)
-  if (isUp || k.key === 'k') return moveCursor($, -1)
-  if (isDown || k.key === 'j') return moveCursor($, 1)
+  // ⇧↑ / ⇧↓ 多选，照 Logseq；不按 ⇧ 直接走就取消
+  if ((isUp || isDown) && k.shift) return extendSelection($, isUp ? -1 : 1)
+  if (isUp || k.key === 'k') return runAction($, 'up')
+  if (isDown || k.key === 'j') return runAction($, 'down')
+  // ] / [：同级的下一块 / 上一块，对话跟着跳（中文输入法下是 】【）
+  if (k.key === ']' || k.key === '】') return stepLevel($, 1)
+  if (k.key === '[' || k.key === '【') return stepLevel($, -1)
+  // /：搜索（中文输入法下是全角的）
+  if (k.key === '/' || k.key === '／') return openSearch($)
   if (k.key === 'left') return toggleFold($, true)
   if (k.key === 'right') return toggleFold($, false)
   if (k.key === 'return' || k.key === 'space') return toggleDetail($)
@@ -1275,7 +1352,6 @@ export const register: Register = (on, options) => {
     await $.command.register({ name: 'agenda', description: '所有会话里需要我做、还没办完的事' })
     await restore($)
     if (current === undefined) await settleStaleLive($)
-    await refreshBody($)
     void $.ui.open({ id: PANE, title: TITLE })
     return next(e)
   })
@@ -1325,12 +1401,14 @@ export const register: Register = (on, options) => {
       }
       if (e.door === 'prompt') lastPromptId = result.uuid
       else if (e.door === 'response' && current !== undefined) {
-        if (result.uuid !== undefined) current.rowIds.push(result.uuid)
         const content = (e.message as { content?: unknown }).content
         if (Array.isArray(content)) {
           for (const c of content) {
             const block = c as { type?: string; text?: string }
-            if (block.type === 'text' && typeof block.text === 'string' && block.text.trim() !== '') current.texts.push(block.text)
+            if (block.type === 'text' && typeof block.text === 'string' && block.text.trim() !== '') {
+              current.texts.push(block.text)
+              if (result.uuid !== undefined) current.answerId = result.uuid
+            }
           }
         }
       }
@@ -1374,7 +1452,6 @@ export const register: Register = (on, options) => {
         turnId: e.turnId,
         text: e.text,
         messageId: lastPromptId,
-        rowIds: [],
         files: new Set(),
         commands: [],
         slash,
@@ -1414,7 +1491,6 @@ export const register: Register = (on, options) => {
     if (current !== undefined && e.agentId === undefined) {
       current.steps.push(describeStep(tool, input))
       queueLive($)
-      if (typeof input.tool_use_id === 'string') current.rowIds.push(input.tool_use_id)
       if ((tool === 'Edit' || tool === 'Write' || tool === 'NotebookEdit') && typeof input.file_path === 'string') {
         current.files.add(input.file_path.split('/').pop() ?? input.file_path)
       }
@@ -1492,7 +1568,7 @@ export const register: Register = (on, options) => {
       files: [...turn.files],
       commands: turn.commands.length,
       messageId: turn.messageId,
-      rowIds: turn.rowIds,
+      ...(turn.answerId === undefined ? {} : { answerId: turn.answerId }),
       tech,
     }
     const branches = turn.branches.map((br, i) => branchBlock(br, `${id}.${i + 1}`, number, id))
@@ -1532,35 +1608,6 @@ export const register: Register = (on, options) => {
     return {}
   })
 
-  // ---------- 正文折叠：改写对话里的行 ----------
-
-  on('ui.render', { component: 'UserMessage' }, async ($, e, next) => {
-    if (e.props.isExpanded) return next(e)
-    if (e.props.origin.kind === 'plugin' && e.props.origin.name === 'outline-sidebar') {
-      return next({ ...e, props: { ...e.props, text: compactSentText(e.props.text) } })
-    }
-    const label = (await read($, body)).labels[e.requestId]
-    return label === undefined ? next(e) : next({ ...e, props: { ...e.props, text: label } })
-  })
-
-  on('ui.render', { component: 'AssistantMessage' }, async ($, e, next) => {
-    if (!(await hideRow($, e.requestId, undefined))) return next(e)
-    const { Box } = $.ui.resolve(e)
-    return <Box display="none" />
-  })
-
-  on('ui.render', { component: 'ToolUse' }, async ($, e, next) => {
-    if (!(await hideRow($, e.requestId, e.props.isExpanded))) return next(e)
-    const { Box } = $.ui.resolve(e)
-    return <Box display="none" />
-  })
-
-  on('ui.render', { component: 'ToolResult' }, async ($, e, next) => {
-    if (!(await hideRow($, e.requestId, e.props.isExpanded))) return next(e)
-    const { Box } = $.ui.resolve(e)
-    return <Box display="none" />
-  })
-
   // ---------- 大纲面板 ----------
 
   // 终端：大纲树是自绘区域（Client），单独一个钩子画；上面那一截（视图栏、工具栏、回顾……）照旧由下面的钩子画。
@@ -1583,6 +1630,12 @@ export const register: Register = (on, options) => {
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const els = $.ui.resolve(e)
     const { Box, Text, Button } = els
+    // 手机端没有输入框和下拉框，搜索框、「更多操作」不画
+    const Input = 'Input' in els ? els.Input : undefined
+    const Select = 'Select' in els ? els.Select : undefined
+    const isTerm = e.surface === 'terminal'
+    // 一长串中文不断行的毛病只在 Claude 桌面版上见过，零宽空格只加在那里
+    const isDesktop = e.surface === 'desktop'
     // 面板拿到键盘（点了视图栏、工具栏，或 Tab 进来）也切英文：按钮的字母快捷键一样会被输入法拿去组字
     if (e.surface === 'terminal') {
       if (e.props.isFocused && !isPaneFocused) void asciiInput($)
@@ -1594,10 +1647,15 @@ export const register: Register = (on, options) => {
     const openIds = await read($, open)
     const at = await read($, cursor)
     const zoomId = await read($, zoom)
-    const isBodyAll = await read($, bodyFoldAll)
     const latest = await read($, recap)
     const isLegend = await read($, legend)
     const title = await read($, sessionTitle)
+    const q = await read($, query)
+    const isSearch = (await read($, searching)) || q !== ''
+    const skipped = await read($, staleSkipped)
+    const stale = staleBlocks(list).filter(b => !skipped.includes(b.id))
+    const staleIds = stale.length >= STALE_MIN ? stale.map(b => b.id) : []
+    const staleText = `${staleIds.length} 块隔了 ${STALE_TURNS} 轮以上还开着，没人动过`
     const now = await $.clock.now()
     const width = e.props.bodyColumns
     // 终端用图标字体；桌面（以及别的能画 SVG 的界面）用 SVG
@@ -1605,7 +1663,7 @@ export const register: Register = (on, options) => {
     // 视图栏的高亮只在终端的树里有意义（别的界面是按钮，焦点由界面自己管）
     const isTabs = e.surface === 'terminal' && (await read($, scope)) === 'tabs'
 
-    const rows = visibleRows(list, v, foldedIds, zoomId, openIds, await isHidingDone($), await autoFold($))
+    const rows = visibleRows(list, v, foldedIds, zoomId, openIds, await isHidingDone($), await autoFold($), q)
     const zoomed = zoomId === null ? undefined : list.find(b => b.id === zoomId)
     const waiting = waitingCount(list)
     const total = v === 'tech' ? sumTech(list) : undefined
@@ -1625,7 +1683,7 @@ export const register: Register = (on, options) => {
           <Box flexDirection="row">
             <Text dimColor>{lead}• </Text>
             <Box flexShrink={1}>
-              <Text color={line.color} dimColor={line.color === undefined}>{line.parts[0]?.text ?? ''}</Text>
+              <Text color={line.color} dimColor={line.color === undefined}>{isDesktop ? breakable(line.parts[0]?.text ?? '') : (line.parts[0]?.text ?? '')}</Text>
             </Box>
           </Box>
         )
@@ -1638,7 +1696,7 @@ export const register: Register = (on, options) => {
               <Text color={line.color} dimColor={line.color === undefined}>{lineText(line)}</Text>
             </Box>
           ) : (
-            desktopLine(desk, line)
+            desktopLine(desk, line, isDesktop)
           )}
         </Box>
       )
@@ -1653,13 +1711,13 @@ export const register: Register = (on, options) => {
           </Text>
         )}
         {/* 视图栏留成按钮：侧栏有键盘时数字键才切得了视图。按钮在指针下一定反色，里面的字只用一种样式，反出来才是一整块 */}
-        <Box flexWrap="wrap" columnGap={1}>
+        <Box flexWrap="wrap" columnGap={1} rowGap={isTerm ? 0 : 'xs'}>
           {keys.map((one, i) => (
             <Button
               key={`view-${one}`}
-              plain
+              {...(isTerm ? { plain: true as const } : { variant: v === one ? ('primary' as const) : ('secondary' as const) })}
               hotkey={String(i + 1)}
-              dimColor={v !== one}
+              dimColor={isTerm && v !== one}
               {...(v === one ? { autoFocus: true as const } : {})}
               onPress={() => (v === one && e.surface === 'terminal' ? undefined : switchView($, one))}
             >
@@ -1673,13 +1731,51 @@ export const register: Register = (on, options) => {
             </Button>
           ))}
         </Box>
-        <Box flexWrap="wrap" columnGap={1}>
-          {ACTIONS.map(a => (
+        <Box flexWrap="wrap" columnGap={1} rowGap={isTerm ? 0 : 'xs'} alignItems="center" {...(isTerm ? {} : { marginTop: 'xs' as const })}>
+          {ACTIONS.filter(a => isTerm || Select === undefined || DESK_ACTIONS.includes(a.key)).map(a => (
             <Button key={a.key} plain hotkey={a.hotkey} onPress={() => runAction($, a.key)}>
-              {actionLabel(a, zoomId !== null, isBodyAll)}
+              {actionLabel(a, zoomId !== null)}
             </Button>
           ))}
+          {!isTerm && Select !== undefined && (
+            <Select
+              key="more"
+              value=""
+              options={[
+                { value: '', label: '更多操作…' },
+                ...ACTIONS.filter(a => !DESK_ACTIONS.includes(a.key) && a.key !== 'up' && a.key !== 'down').map(a => ({ value: a.key, label: `${a.hotkey.toUpperCase()}　${actionLabel(a, zoomId !== null)}` })),
+              ]}
+              onSelect={(value: string) => (value === '' ? undefined : runAction($, value))}
+            />
+          )}
         </Box>
+        {/* 收进下拉框的操作，按钮照样画出来但藏着：下拉框里标的字母照样按得动 */}
+        {!isTerm && Select !== undefined && (
+          <Box display="none">
+            {ACTIONS.filter(a => !DESK_ACTIONS.includes(a.key)).map(a => (
+              <Button key={a.key} plain hotkey={a.hotkey} onPress={() => runAction($, a.key)}>
+                {actionLabel(a, zoomId !== null)}
+              </Button>
+            ))}
+          </Box>
+        )}
+        {isSearch && Input !== undefined && (
+          <Box flexDirection="row" columnGap={1}>
+            <Input key={SEARCH} label="搜索" placeholder="关键词；清空后回车收起" value={q} onInput={(text: string) => setQuery($, text)} onSubmit={(text: string) => submitSearch($, text)} />
+            {q.trim() !== '' && <Text dimColor>命中 {String(rows.filter(r => !r.isContext && r.item === undefined).length)} 块</Text>}
+          </Box>
+        )}
+        {staleIds.length > 0 && (
+          <Box flexWrap="wrap" columnGap={1}>
+            <Text color="warning">{staleText}</Text>
+            <Button key="stale-done" plain onPress={() => doneStale($, staleIds)}>
+              全部 Done
+            </Button>
+            <Button key="stale-skip" plain onPress={() => skipStale($, staleIds)}>
+              不用
+            </Button>
+          </Box>
+        )}
         {latest !== null && (
           <Box flexDirection="column">
             <Box flexDirection="row" columnGap={1}>
@@ -1725,7 +1821,8 @@ export const register: Register = (on, options) => {
             {allMetrics !== null && metricsLines(allMetrics).map(line => drawLine(line, '  '))}
           </Box>
         )}
-        <Text dimColor>{'─'.repeat(Math.max(1, Math.min(width, 60)))}</Text>
+        {/* 分隔线只在终端画：桌面是比例字体，按格数画的横线会折成两行 */}
+        {isTerm ? <Text dimColor>{'─'.repeat(Math.max(1, Math.min(width, 60)))}</Text> : <Box marginBottom="sm" />}
       </Box>
     )
 
@@ -1734,11 +1831,13 @@ export const register: Register = (on, options) => {
     // 终端里用树视图接 Logseq 式按键（中文输入法下也能用）；别的界面退回成按钮
     if (e.surface === 'terminal') {
       const viewLabels = keys.map((one, i) => `${i + 1}: ${viewLabel(one, waiting)}`)
-      const actionLabels = ACTIONS.map(a => `${a.hotkey}: ${actionLabel(a, zoomId !== null, isBodyAll)}`)
+      const actionLabels = ACTIONS.map(a => `${a.hotkey}: ${actionLabel(a, zoomId !== null)}`)
       const headerRows =
         (title === null ? 0 : textRows(title, width)) +
         estimateWrappedRows(viewLabels, width) +
         estimateWrappedRows(actionLabels, width) +
+        (isSearch ? 1 : 0) +
+        (staleIds.length > 0 ? estimateWrappedRows([staleText, '全部 Done', '不用'], width) : 0) +
         (latest === null ? 0 : 1 + (latest.text === '' ? 0 : textRows(latest.text, width - 2))) +
         (isLegend ? legendRows(width) : 0) +
         (zoomed === undefined ? 0 : 1) +
@@ -1749,11 +1848,11 @@ export const register: Register = (on, options) => {
       const wheelAt = await read($, wheel)
       const levelNow = await read($, level)
       paneTree = {
-        rows: toTreeRows(rows, v, openIds, at, now),
+        rows: toTreeRows(rows, v, openIds, at, now, await selectedKeys($)),
         height,
         scope: isTabs ? 'tabs' : 'tree',
         wheel: wheelAt,
-        menu: menuFor(levelNow, zoomId !== null, isBodyAll),
+        menu: menuFor(levelNow, zoomId !== null),
         itemMenu: itemMenu(),
         ...(empty === undefined ? {} : { empty }),
       }
@@ -1772,42 +1871,74 @@ export const register: Register = (on, options) => {
         {rows.map(row => {
           const b = row.block
           const isAt = row.key === at
-          if (row.item !== undefined) {
-            const st = row.item.status
-            return (
-              <Box key={`row-${row.key}`} flexDirection="row" columnGap={1}>
-                {row.prefix !== '' && <Text dimColor>{row.prefix.trimEnd()}</Text>}
-                <Button key={`block-${row.key}`} plain onPress={() => pick($, row.key)}>
-                  <Text inverse={isAt}>{ITEM_MARK}</Text>
-                </Button>
-                {/* 状态和标题之间固定两格：列间距一格，再补一格 */}
-                <Box marginRight={1}>{drawStatus(st)}</Box>
-                <Box flexShrink={1}>
-                  <Text dimColor={!isOpenStatus(st)} strikethrough={st === 'CANCELLED'} bold={isAt}>{row.item.text}</Text>
-                </Box>
-              </Box>
-            )
+          const st = row.item?.status ?? b.status
+          // 悬停时整行变色，行尾露出两个快捷按钮；同一个 scope 一起亮
+          const scope = `os-row-${row.key}`
+          const act = async (action: string) => {
+            await setCursor($, row.key)
+            await runAction($, action)
           }
-          const arrow = row.hasChildren ? (row.isFolded ? '▸' : '▾') : '•'
-          const badge = KIND_BADGE[b.kind]
-          const isOpenRow = isOpenStatus(b.status)
-          const lines = row.isContext ? [] : blockLines(b, v, openIds.includes(b.id), now)
+          const badge = row.item === undefined ? KIND_BADGE[b.kind] : undefined
+          const isOpenRow = isOpenStatus(st)
+          const lines = row.item !== undefined || row.isContext ? [] : blockLines(b, v, openIds.includes(b.id), now)
+          const arrow = row.item !== undefined ? ITEM_MARK : row.hasChildren ? (row.isFolded ? '▸' : '▾') : '•'
           return (
-            <Box key={`row-${row.key}`} flexDirection="column" marginTop={row.isGap ? 1 : 0}>
-              <Box flexDirection="row" columnGap={1}>
-                {row.prefix !== '' && <Text dimColor>{row.prefix.trimEnd()}</Text>}
-                <Button key={`block-${row.key}`} plain onPress={() => pick($, row.key)}>
-                  <Text inverse={isAt}>{arrow}</Text>
-                </Button>
-                <Box marginRight={1}>{b.isPending ? <Text dimColor>…</Text> : drawStatus(b.status, row.isContext, b.statusAt)}</Box>
+            <Box
+              key={`row-${row.key}`}
+              flexDirection="column"
+              marginTop={row.isGap ? 'sm' : 0}
+              paddingY={desk === undefined ? 0 : 'xs'}
+              {...(isAt ? { backgroundColor: DESK_CURSOR_BG } : {})}
+              hover={{ scope, backgroundColor: isAt ? DESK_CURSOR_BG : DESK_HOVER_BG }}
+            >
+              <Box position="relative" flexDirection="row" alignItems="flex-start" columnGap={1} paddingLeft={row.depth * DESK_INDENT}>
+                <Box width={2} flexShrink={0}>
+                  <Button key={`block-${row.key}`} plain onPress={() => pick($, row.key)}>
+                    {arrow}
+                  </Button>
+                </Box>
+                <Box width={DESK_STATUS_COL} flexShrink={0}>
+                  {b.isPending && row.item === undefined ? <Text dimColor>…</Text> : drawStatus(st, row.isContext, row.item === undefined ? b.statusAt : undefined)}
+                </Box>
                 {badge !== undefined && <Text color={badge.color}>[{badge.text}]</Text>}
-                <Box flexShrink={1}>
-                  <Text dimColor={row.isContext || (!isOpenRow && b.live === undefined)} strikethrough={b.status === 'CANCELLED'} bold={isAt || (isOpenRow && !row.isContext)} color={badge?.color}>
-                    {b.title}
+                <Box flexGrow={1} flexShrink={1} minWidth={0}>
+                  <Text
+                    dimColor={row.isContext || (!isOpenRow && b.live === undefined)}
+                    strikethrough={st === 'CANCELLED'}
+                    bold={isAt || (isOpenRow && !row.isContext)}
+                    color={badge?.color}
+                  >
+                    {(isDesktop ? breakable : String)(row.item === undefined ? b.title || UNTITLED : row.item.text)}
                   </Text>
                 </Box>
+                {/* 浮在行尾、盖在标题上，不占位置：鼠标进出这一行时标题不会重新折行。底色用 inverseText（就是面板的底色） */}
+                {!row.isContext && (
+                  <Box
+                    display="none"
+                    hover={{ scope, display: 'flex' }}
+                    position="absolute"
+                    right={0}
+                    top={0}
+                    flexDirection="row"
+                    columnGap={1}
+                    paddingX={1}
+                    backgroundColor="inverseText"
+                    borderStyle="round"
+                    borderDimColor
+                  >
+                    <Button key={`quick-done-${row.key}`} plain onPress={() => act('done')}>
+                      Done
+                    </Button>
+                    <Button key={`quick-jump-${row.key}`} plain onPress={() => act('jump')}>
+                      原文
+                    </Button>
+                  </Box>
+                )}
               </Box>
-              {lines.map(line => drawLine(line, `${row.cont}${line.level === 1 ? '   ' : ''}`))}
+              {/* 字段行和标题左边对齐：缩进 + 箭头 + 状态列 */}
+              {lines.map(line => (
+                <Box paddingLeft={row.depth * DESK_INDENT + 2 + 1 + DESK_STATUS_COL + 1}>{drawLine(line, '')}</Box>
+              ))}
             </Box>
           )
         })}

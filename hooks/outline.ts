@@ -183,6 +183,41 @@ export const matches = (b: Block, v: View) => {
   return true
 }
 
+/** 搜索：标题、原话、做了、结论、问题、「需要我做」里有没有这个词（不分大小写） */
+export const searchHit = (b: Block, query: string) => {
+  const q = query.trim().toLowerCase()
+  if (q === '') return true
+  return [b.title, b.ask, b.conclusion, ...b.did, ...b.questions, ...b.needsMe].some(text => text.toLowerCase().includes(q))
+}
+
+/** 隔了这么多轮还开着、状态没人动过，算「长期没动」 */
+export const STALE_TURNS = 10
+
+/** 长期没动的块攒到这么多，才提示一键 Done */
+export const STALE_MIN = 5
+
+/**
+ * 长期没动的块：还开着、离最新一轮隔了 STALE_TURNS 轮以上、我也没手动改过状态。
+ * 待验收的不算：ToReview 要我看过证据才能 Done，不能一键带过
+ */
+export const staleBlocks = (list: readonly Block[]) => {
+  const latest = list.reduce((n, b) => Math.max(n, b.turn), 0)
+  return list.filter(b => isOpenStatus(b.status) && b.status !== 'TOREVIEW' && !b.isStatusManual && b.live === undefined && !b.isPending && latest - b.turn >= STALE_TURNS)
+}
+
+/**
+ * G 跳到哪条消息：块跳到我那条消息（从我问的什么读起）；「需要我做」的一条跳到这一轮最后那条回答，那是它的出处。
+ * 子任务、btw 这些没有自己的消息，跳到它所在那一轮
+ */
+export const jumpTarget = (list: readonly Block[], key: string) => {
+  const { blockId, index } = parseKey(key)
+  const b = list.find(one => one.id === blockId)
+  const turn = b?.kind === 'turn' ? b : list.find(one => one.id === b?.parent)
+  if (turn === undefined) return undefined
+  const answer = index !== undefined ? turn.answerId : undefined
+  return answer ?? turn.messageId
+}
+
 /** 还没办完的「需要我做的」条数，面板上的角标 */
 export const waitingCount = (list: readonly Block[]) =>
   list.reduce((n, b) => {
@@ -237,14 +272,15 @@ export type AutoFold = { unfolded: readonly string[]; hold: readonly string[] }
 
 /**
  * 按视图把树摊成可见的行。除「全部」外都是 sparse tree：命中的块和它们的祖先，其余不显示。
- * hideDone（层级「去掉 Done」）：已了结的块和「需要我做」条目也不算命中，块下面还有没了结的子块时留着当上下文
+ * hideDone（层级「去掉 Done」）：已了结的块和「需要我做」条目也不算命中，块下面还有没了结的子块时留着当上下文。
+ * query（搜索）：还得含这个词才算命中，「全部」视图也一样摊成 sparse tree
  */
-export const visibleRows = (list: readonly Block[], v: View, folded: readonly string[], zoom: string | null, open: readonly string[] = [], hideDone = false, auto?: AutoFold): Row[] => {
+export const visibleRows = (list: readonly Block[], v: View, folded: readonly string[], zoom: string | null, open: readonly string[] = [], hideDone = false, auto?: AutoFold, query = ''): Row[] => {
   // 「结论」「它已做的」「技术信息」本来就是看做完的事，不自动折
   const isAutoFolded = (b: Block) =>
     auto !== undefined && AUTO_FOLD_VIEWS.includes(v) && !auto.unfolded.includes(b.id) && !auto.hold.includes(b.id) && isSettledTree(list, b)
-  const isFiltered = v !== 'all' || hideDone
-  const hit = (b: Block) => matches(b, v) && !(hideDone && SETTLED.includes(b.status))
+  const isFiltered = v !== 'all' || hideDone || query.trim() !== ''
+  const hit = (b: Block) => matches(b, v) && !(hideDone && SETTLED.includes(b.status)) && searchHit(b, query)
   const keep = new Set<string>()
   if (isFiltered) {
     for (const b of list) {
@@ -519,6 +555,8 @@ export type TreeRow = {
   isCanceled: boolean
   /** 「需要我做」的一条，回车菜单只有改状态 */
   isItem?: boolean
+  /** 在多选的范围里 */
+  isSelected?: boolean
   /** 标题前面的灰色小记号，比如后来的对话自动了结的「自动」 */
   tag?: string
   lines: TreeLine[]
@@ -538,7 +576,7 @@ export type TreeProps = {
   wheel?: number
 }
 
-export const toTreeRows = (rows: readonly Row[], v: View, open: readonly string[], cursor: string | null, now = 0): TreeRow[] =>
+export const toTreeRows = (rows: readonly Row[], v: View, open: readonly string[], cursor: string | null, now = 0, selected: readonly string[] = []): TreeRow[] =>
   rows.map(row => {
     const b = row.block
     const st = row.item?.status ?? b.status
@@ -555,6 +593,7 @@ export const toTreeRows = (rows: readonly Row[], v: View, open: readonly string[
       isAt: row.key === cursor,
       isClosed: !isOpen && b.live === undefined,
       isCanceled: st === 'CANCELLED',
+      ...(selected.includes(row.key) ? { isSelected: true } : {}),
     }
     if (row.item !== undefined) {
       const isAuto = b.needsMeAuto?.[row.item.index] != null
@@ -638,14 +677,3 @@ export const estimateWrappedRows = (labels: readonly string[], columns: number) 
 /** 一段文字在给定宽度下大约占几行（中日韩文字占两格） */
 export const textRows = (text: string, columns: number) => Math.max(1, Math.ceil(cellWidth(text) / Math.max(4, columns)))
 
-/**
- * 侧栏替我发给 Claude 的消息，在对话里只画要点：开头一句，加上每一条的「哪件事：怎么答 / 从什么改成什么」。
- * 块名括注、每条后面给 Claude 的说明、「回一句收到」「开子代理」这些整段话都不画；ctrl+o 照样看全文
- */
-export const compactSentText = (text: string) => {
-  const [head = '', ...rest] = text.split('\n')
-  const items = rest
-    .filter(line => line.startsWith('- '))
-    .map(line => line.replace(/（[^（）]*）(?=：)/, '').replace(/^(- .*?：[^。]*)。.*$/, '$1'))
-  return [head, ...items].join('\n')
-}
