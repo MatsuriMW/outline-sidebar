@@ -1,7 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
-import { jumpTarget, wrapCells } from '../hooks/outline'
+import { clampParent, jumpTarget, relayout, rulerTicks, wrapCells } from '../hooks/outline'
 
 const PANE = {
   plugin: 'outline-sidebar',
@@ -70,6 +70,13 @@ const engine = (on: On, copied: string[], stored: Record<string, unknown> = {}, 
 const act = async (ui: any, key: string) =>
   (await ui.find({ type: 'Button', key })) !== undefined ? ui.press({ key }) : ui.select({ key: 'more', value: key })
 
+/** 光标默认停在最新一行；要从第一块看起的测试先点一下第一块，再等离开的那块过了自动折叠的延迟，起点就和光标在第一块时一样 */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const startAtFirst = async (ui: any, clock: { advance: (ms: number) => Promise<void> }) => {
+  await ui.post({ type: 'click', id: 'b1' }, { in: 'tree' })
+  await clock.advance(3000)
+}
+
 /** 每次发消息时附带的 context，看侧栏的状态改动有没有告诉 Claude */
 const contexts: string[][] = []
 /** 每次发出去的消息正文，看验收没通过时 mod 有没有替我发消息给 Claude */
@@ -110,7 +117,10 @@ test('三轮对话：视图、子任务、技术信息、待办消解、导出�
 
   await ui.press({ key: 'view-all' })
   expect(await has(/给随机漫步加时间筛选/)).toBe(true)
-  // 整棵都做完的块自动折起来：b2 下面的子任务先看不到；光标挪到 b2 上就不折
+  // 光标默认停在最新一行 b2 上，b2 不折；挪到 b1、过了自动折叠的延迟，整棵都做完的 b2 折起来，子任务看不到；光标回到 b2 上就不折
+  expect(await has(/查 Hexo 文档/)).toBe(true)
+  await ui.press({ key: 'block-b1' })
+  await clock.advance(3000)
   expect(await has(/查 Hexo 文档/)).toBe(false)
   await ui.press({ key: 'block-b2' })
   expect(await has(/\[子任务\]/)).toBe(true)
@@ -248,8 +258,9 @@ test('终端里的树：Logseq 式按键，⌘/ 切状态', async ($, on) => {
   // 不再有 Org 式的 [x] 记号
   expect(await has(/\[x\]|\[ \]/)).toBe(false)
 
-  // 先 ⏎ 进入视图；选中 b2，⌥→ 缩进到 b1 下；光标回 b1，Ctrl+↑ 折叠
+  // 先 ⏎ 进入视图，光标挪到第一块；选中 b2，⌥→ 缩进到 b1 下；光标回 b1，Ctrl+↑ 折叠
   await ui.key({ key: 'return', in: 'tree' })
+  await startAtFirst(ui, clock)
   for (let i = 0; i < 2; i++) await ui.key({ key: 'down', in: 'tree' })
   await ui.key({ key: 'right', meta: true, in: 'tree' })
   for (let i = 0; i < 4; i++) await ui.key({ key: 'up', in: 'tree' })
@@ -296,7 +307,7 @@ test('终端里的树：Logseq 式按键，⌘/ 切状态', async ($, on) => {
   expect(await has(/Unclear\?/)).toBe(true)
 
   // 数字键切视图：需要我做的
-  await ui.key({ key: '2', in: 'tree' })
+  await ui.key({ key: '1', in: 'tree' })
   expect(await has(/^确认第 4 档是什么$/)).toBe(true)
   await ui.unmount()
 })
@@ -307,7 +318,7 @@ test('视图栏和树分两层：数字选视图、⏎ 进入、⌫ 回视图栏
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   const has = async (text: RegExp) => (await ui.find({ type: 'Text', text, in: 'tree' })) !== undefined
   // 一开始在视图栏：数字和 ←→ 换视图，⌘/ 这类树里的键碰不到块
-  await ui.key({ key: '4', in: 'tree' })
+  await ui.key({ key: '5', in: 'tree' })
   await ui.key({ key: 'left', in: 'tree' })
   await ui.key({ key: 'right', in: 'tree' })
   expect(await has(/给随机漫步加时间筛选/)).toBe(true)
@@ -318,11 +329,11 @@ test('视图栏和树分两层：数字选视图、⏎ 进入、⌫ 回视图栏
   await ui.key({ key: '/', meta: true, in: 'tree' })
   expect(await has(/Todo/)).toBe(true)
   // 在树里直接按数字也能换视图
-  await ui.key({ key: '2', in: 'tree' })
+  await ui.key({ key: '1', in: 'tree' })
   expect(await has(/^确认第 4 档是什么$/)).toBe(true)
   // ⌫ 回视图栏，树里的键又碰不到了
   await ui.key({ key: 'backspace', in: 'tree' })
-  await ui.key({ key: '4', in: 'tree' })
+  await ui.key({ key: '5', in: 'tree' })
   await ui.key({ key: '/', meta: true, in: 'tree' })
   expect(await has(/Doing/)).toBe(false)
   await ui.unmount()
@@ -365,7 +376,7 @@ test('回顾：接住 Claude Code 自带的 recap，也能按 r 生成大纲回�
   expect(await has(/^大纲/)).toBe(true)
   expect(await has(/第 4 档定为 3 个月/)).toBe(true)
 
-  // 回顾也进了大纲，结论视图里能看到
+  // 回顾也进了大纲，问题与结论视图里能看到
   await ui.press({ key: 'view-conclusions' })
   expect(await has(/\[回顾\]/)).toBe(true)
   await ui.unmount()
@@ -407,8 +418,9 @@ test('中文输入法下也能用：回车弹菜单改状态，空格展开详�
   const has = async (text: RegExp) => (await ui.find({ type: 'Text', text, in: 'tree' })) !== undefined
   await ui.press({ key: 'view-all' })
 
-  // 选中第一块，空格展开详情
+  // ↓ 进入视图，选中第一块，空格展开详情
   await ui.key({ key: 'down', in: 'tree' })
+  await startAtFirst(ui, clock)
   expect(await has(/默认全部/)).toBe(false)
   await ui.key({ key: ' ', in: 'tree' })
   expect(await has(/默认全部/)).toBe(true)
@@ -785,8 +797,7 @@ test('窗口按行截、滚轮按行翻：底下不空一截，↑ ↓ 数的是
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: { ...PANE.props, scroll: { offset: 0, bodyRows: 18 } } })
   const text = async (pattern: RegExp) => (await ui.find({ type: 'Text', text: pattern, in: 'tree' }))?.text
   await ui.press({ key: 'view-all' })
-  await ui.key({ key: 'up', in: 'tree' })
-  for (let i = 0; i < 12; i++) await ui.key({ key: 'up', in: 'tree' })
+  await startAtFirst(ui, clock)
   // 光标在第 1 件事上，窗口从头开始；底下还有几行，数的是行不是块
   expect(await text(/↑/)).toBeUndefined()
   const below = Number((await text(/↓ \d+ 行/))?.match(/\d+/)?.[0])
@@ -800,9 +811,54 @@ test('窗口按行截、滚轮按行翻：底下不空一截，↑ ↓ 数的是
   expect(await text(/↑ \d+ 行/)).toContain('↑ 3 行')
   await wheel(2)
   expect(await text(/↑ \d+ 行/)).toContain('↑ 9 行')
-  // 光标一动，窗口拉回光标所在的块
+  // 光标一动，窗口拉回光标所在的块：光标到第 2 件事，窗口从它开始，上面只剩第 1 件事和一行空行
   await ui.key({ key: 'down', in: 'tree' })
-  expect(await text(/↑/)).toBeUndefined()
+  expect(await text(/↑ \d+ 行/)).toContain('↑ 2 行')
+  await ui.unmount()
+})
+
+test('切视图：光标停在最新一行，切过去也落在那个视图的最新一行、放到窗口中间；自己挪过光标的，切走再切回来还在原处', async ($, on) => {
+  const reply = (n: number) => ({ title: `第 ${n} 件事`, status: 'DOING', did: [], conclusion: '', questions: [], needsMe: [], parent: null, resolved: [] })
+  const clock = engine(on, [], {}, Array.from({ length: 12 }, (_, i) => reply(i + 1)))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  for (let i = 1; i <= 12; i++) {
+    await $.turn.start({ text: '做点事', turnId: `t${i}` })
+    await $.turn.complete({ answer: '好了', durationMs: 1000, isAborted: false, turnId: `t${i}`, reason: 'answer', usage: { ...USAGE, model: 'claude-opus-5-5' } })
+    await clock.settle()
+  }
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: { ...PANE.props, scroll: { offset: 0, bodyRows: 18 } } })
+  const text = async (pattern: RegExp) => (await ui.find({ type: 'Text', text: pattern, in: 'tree' }))?.text
+  const above = async () => Number((await text(/↑ \d+ 行/))?.match(/\d+/)?.[0] ?? 0)
+  // 光标那一行的箭头是反色的，找它所在的标题
+  const at = async () => {
+    const texts = (await ui.findAll({ type: 'Text', in: 'tree' })) as { text?: string; props?: { inverse?: boolean } }[]
+    const i = texts.findIndex(t => t.props?.inverse === true)
+    return texts.slice(i).find(t => /第 \d+ 件事/.test(t.text ?? ''))?.text
+  }
+
+  // 一打开：光标默认在最新一行，放到窗口中间，下面空着，没有「↓ 还有几行」
+  await ui.press({ key: 'view-all' })
+  await ui.key({ key: 'return', in: 'tree' })
+  expect(await at()).toBe('第 12 件事')
+  expect(await text(/↓/)).toBeUndefined()
+  const centered = await above()
+  expect(centered).toBeGreaterThan(0)
+  // 光标一动就不再居中，窗口贴回列表末尾，上面露出来的比居中时多
+  await ui.key({ key: 'up', in: 'tree' })
+  expect(await above()).toBeLessThan(centered)
+
+  // 光标回到最新一行再切视图：落在那个视图的最新一行，又放到中间
+  await ui.key({ key: 'down', in: 'tree' })
+  await ui.press({ key: 'view-asks' })
+  expect(await at()).toBe('第 12 件事')
+  expect(await text(/↓/)).toBeUndefined()
+
+  // 自己把光标挪到第 3 件事：切走再切回来，光标还在第 3 件事
+  await ui.post({ type: 'click', id: 'b3' }, { in: 'tree' })
+  await ui.press({ key: 'view-all' })
+  expect(await at()).toBe('第 3 件事')
+  await ui.press({ key: 'view-asks' })
+  expect(await at()).toBe('第 3 件事')
   await ui.unmount()
 })
 
@@ -957,6 +1013,7 @@ test('长期没动的块攒到 5 块，提示一键 Done；待验收的不算，
   await ui.press({ key: 'stale-done' })
   expect(await ui.find({ type: 'Text', text: /隔了 10 轮以上/ })).toBeUndefined()
   await ui.press({ key: 'view-all' })
+  await startAtFirst(ui, clock)
   const shown = (await ui.findAll({ type: 'Text', in: 'tree' })).map(f => (f as { text?: string }).text ?? '').join('|')
   expect(shown).toContain('ToReview')
   expect(shown).not.toContain('Todo')
@@ -972,6 +1029,7 @@ test('长期没动的提示点「不用」就不再为这几块提示', async ($
   await ui.press({ key: 'stale-skip' })
   expect(await ui.find({ type: 'Text', text: /隔了 10 轮以上/ })).toBeUndefined()
   await ui.press({ key: 'view-all' })
+  await startAtFirst(ui, clock)
   expect((await ui.findAll({ type: 'Text', in: 'tree' })).map(f => (f as { text?: string }).text ?? '').join('|')).toContain('Todo')
   await ui.unmount()
 })
@@ -991,8 +1049,62 @@ test('G 跳到原文：块跳到我那条消息，「需要我做」的条目跳
   expect(jumpTarget(list, 'b2#0')).toBe('m-b2')
 })
 
+/** b1～b4 连着 4 块了结，b5 还没做完隔开，b6、b7 只连着 2 块，b8 是最新那块 */
+const RUN_BLOCKS = () => [
+  ...['b1', 'b2', 'b3', 'b4'].map(id => savedBlock(id, null)),
+  savedBlock('b5', null, { status: 'TODO' }),
+  ...['b6', 'b7', 'b8'].map(id => savedBlock(id, null)),
+]
+
+test('大纲上半截连着 3 块以上整棵都了结的顶层块折成一行「…」；最新那块总留着；→ 展开，光标落在这一串的第一块', async ($, on) => {
+  engine(on, [], { 'session:sess-1': { blocks: RUN_BLOCKS() } })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  const shown = async () => (await ui.findAll({ type: 'Text', in: 'tree' })).map(f => (f as { text?: string }).text ?? '').join('|')
+  // 光标那一行的箭头是反色的，找它所在的标题
+  const at = async () => {
+    const texts = (await ui.findAll({ type: 'Text', in: 'tree' })) as { text?: string; props?: { inverse?: boolean } }[]
+    const i = texts.findIndex(t => t.props?.inverse === true)
+    return texts.slice(i).find(t => /块 b\d|已了结/.test(t.text ?? ''))?.text
+  }
+
+  await ui.press({ key: 'view-all' })
+  let text = await shown()
+  expect(text).toContain('已了结 4 块')
+  expect(text).not.toContain('块 b2')
+  for (const id of ['b5', 'b6', 'b7', 'b8']) expect(text).toContain(`块 ${id}`)
+
+  // 光标默认在最新一行 b8；往上走四行到「…」，按 → 展开
+  await ui.key({ key: 'return', in: 'tree' })
+  for (let i = 0; i < 4; i++) await ui.key({ key: 'up', in: 'tree' })
+  expect(await at()).toContain('已了结 4 块')
+  await ui.key({ key: 'right', in: 'tree' })
+  text = await shown()
+  expect(text).not.toContain('已了结')
+  for (const id of ['b1', 'b2', 'b3', 'b4']) expect(text).toContain(`块 ${id}`)
+  expect(await at()).toBe('块 b1')
+  // 展开过的这一串，光标走开以后也不再折
+  await ui.post({ type: 'click', id: 'b8' }, { in: 'tree' })
+  expect(await shown()).not.toContain('已了结')
+  await ui.unmount()
+})
+
+test('桌面版：「…」那一行点「展开」就展开', async ($, on) => {
+  engine(on, [], { 'session:sess-1': { blocks: RUN_BLOCKS() } })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  const ui = await $.ui.mount({ ...PANE, surface: 'vscode' })
+  const has = async (text: RegExp) => (await ui.find({ type: 'Text', text })) !== undefined
+  await ui.press({ key: 'view-all' })
+  expect(await has(/已了结 4 块/)).toBe(true)
+  expect(await has(/块 b2/)).toBe(false)
+  await ui.press({ key: 'more-more:b1' })
+  expect(await has(/已了结/)).toBe(false)
+  expect(await has(/块 b2/)).toBe(true)
+  await ui.unmount()
+})
+
 test('] / [：光标在同级的块之间走，这一层走完到上一层的下一块；条目和更深的子块跳过', async ($, on) => {
-  engine(on, [], { 'session:sess-1': { blocks: [savedBlock('b1', null), savedBlock('b2', 'b1'), savedBlock('b3', 'b2'), savedBlock('b4', 'b1'), savedBlock('b5', null)] } })
+  const clock = engine(on, [], { 'session:sess-1': { blocks: [savedBlock('b1', null), savedBlock('b2', 'b1'), savedBlock('b3', 'b2'), savedBlock('b4', 'b1'), savedBlock('b5', null)] } })
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   // 光标那一行的箭头是反色的，找它所在的标题
@@ -1003,6 +1115,7 @@ test('] / [：光标在同级的块之间走，这一层走完到上一层的下
   }
   await ui.press({ key: 'view-all' })
   await ui.key({ key: 'return', in: 'tree' })
+  await startAtFirst(ui, clock)
   await ui.key({ key: 'down', in: 'tree' })
   expect(await at()).toBe('块 b2')
   await ui.key({ key: ']', in: 'tree' })
@@ -1025,4 +1138,231 @@ test('桌面版：一长串中文的标题在字之间插零宽空格才折得�
   const code = await $.ui.mount({ ...PANE, surface: 'vscode' })
   expect(await code.find({ type: 'Text', text: title })).toBeDefined()
   await code.unmount()
+})
+
+test('问题与结论：我问的问题拿问句当标题，下面跟着结论；只有结论的块照旧；旧块按原话的问号猜', async ($, on) => {
+  const reply = (title: string, userQuestion: string, conclusion: string) => ({ title, status: 'DONE', did: [], userQuestion, conclusion, questions: [], needsMe: [], parent: null, resolved: [] })
+  const clock = engine(on, [], {}, [
+    reply('解释缓存为什么没命中', '缓存为什么没命中？', '系统提示词每轮都变'),
+    reply('修 Hexo 部署', '', '下划线开头的目录被忽略'),
+    reply('改按钮颜色', '', ''),
+  ])
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  for (const [turnId, text] of [['t1', '缓存怎么老是不命中啊'], ['t2', '博客部署挂了'], ['t3', '按钮换成蓝色']] as const) {
+    await $.turn.start({ text, turnId })
+    await $.turn.complete({ answer: '好了', durationMs: 1000, isAborted: false, turnId, reason: 'answer', usage: { ...USAGE, model: 'claude-opus-5-5' } })
+    await clock.settle()
+  }
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  const has = async (text: RegExp) => (await ui.find({ type: 'Text', text, in: 'tree' })) !== undefined
+  // 数字键顺序：1 需要我做的、2 问题与结论、3 我让它做的、4 它已做的、5 全部、6 技术信息
+  await ui.key({ key: '2', in: 'tree' })
+  expect(await has(/缓存为什么没命中？/)).toBe(true)
+  expect(await has(/解释缓存为什么没命中/)).toBe(false)
+  expect(await has(/系统提示词每轮都变/)).toBe(true)
+  expect(await has(/修 Hexo 部署/)).toBe(true)
+  expect(await has(/改按钮颜色/)).toBe(false)
+  // 别的视图还是用原来的标题
+  await ui.key({ key: '5', in: 'tree' })
+  expect(await has(/解释缓存为什么没命中/)).toBe(true)
+  expect(await has(/改按钮颜色/)).toBe(true)
+  await ui.unmount()
+})
+
+test('问题与结论：加问句字段之前总结的块，原话以问号结尾的算问题', async ($, on) => {
+  mock.clock(on)
+  const old = { kind: 'turn', turn: 1, status: 'DONE', did: [], conclusion: '', questions: [], needsMe: [], parent: null, isManual: false, isStatusManual: false, isPending: false, files: [], commands: 0 }
+  mock.store(on, {
+    'session:sess-1': {
+      blocks: [
+        { ...old, id: 'b1', ask: '这个按键为什么没反应？', title: '查按键没反应的原因' },
+        { ...old, id: 'b2', turn: 2, ask: '把按键改成 F', title: '改按键' },
+      ],
+    },
+  })
+  on('command.register', () => ({ value: { command: 'outline' } }) as never)
+  on('ui.open', () => ({ value: { isPlaced: true } }) as never)
+  on('session.id', () => ({ value: 'sess-1' }) as never)
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  const ui = await $.ui.mount({ ...PANE, surface: 'vscode' })
+  const has = async (text: RegExp) => (await ui.find({ type: 'Text', text })) !== undefined
+  await ui.press({ key: 'view-conclusions' })
+  expect(await has(/^这个按键为什么没反应？$/)).toBe(true)
+  expect(await has(/改按键/)).toBe(false)
+  await ui.unmount()
+})
+
+test('回复：A 在还没了结的条目上露出回复框，回车把回复连同是哪一件发给 Claude；已了结的不弹框，空着回车不发', async ($, on) => {
+  const reply = { title: '给随机漫步加时间筛选', status: 'WAITING', did: [], conclusion: '', questions: [], needsMe: ['确认第 4 档是什么'], asks: [0], parent: null, resolved: [] }
+  const clock = engine(on, [], {}, [reply])
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.turn.start({ text: '加个时间筛选', turnId: 't1' })
+  await $.turn.complete({ answer: '加好了', durationMs: 1000, isAborted: false, turnId: 't1', reason: 'answer', usage: { ...USAGE, model: 'claude-opus-5-5' } })
+  await clock.settle()
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  // 1 号视图「需要我做的」，进树，光标默认在最新一行，也就是那一条
+  await ui.key({ key: '1', in: 'tree' })
+  await ui.key({ key: 'return', in: 'tree' })
+  await ui.key({ key: 'a', in: 'tree' })
+  expect(await ui.find({ key: 'reply-box' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^回复 「确认第 4 档是什么」/ })).toBeDefined()
+  const sent = prompts.length
+  await ui.input({ key: 'reply-box', text: '就 3 个月吧' })
+  expect(prompts.length).toBe(sent + 1)
+  expect(prompts.at(-1)).toContain('我在大纲侧栏里回复了这件事')
+  expect(prompts.at(-1)).toContain('「确认第 4 档是什么」（块 [b1]「给随机漫步加时间筛选」）：就 3 个月吧')
+  expect(await ui.find({ key: 'reply-box' })).toBeUndefined()
+
+  // 空着回车：收起，不发
+  await ui.key({ key: 'a', in: 'tree' })
+  await ui.input({ key: 'reply-box', text: '  ' })
+  expect(prompts.length).toBe(sent + 1)
+  expect(await ui.find({ key: 'reply-box' })).toBeUndefined()
+
+  // 标成 Done 以后再按 A：不弹回复框
+  await ui.key({ key: 'd', in: 'tree' })
+  await ui.key({ key: 'a', in: 'tree' })
+  expect(await ui.find({ key: 'reply-box' })).toBeUndefined()
+  await ui.unmount()
+})
+
+/** 三轮：第 2 轮在等我，其余做完了 */
+const RULER_REPLIES = () => [
+  { title: '修 Hexo 部署', status: 'DONE', did: [], conclusion: '', questions: [], needsMe: [], parent: null, resolved: [] },
+  { title: '给随机漫步加时间筛选', status: 'WAITING', did: [], conclusion: '', questions: [], needsMe: ['确认第 4 档是什么'], asks: [0], parent: null, resolved: [] },
+  { title: '改按钮颜色', status: 'DONE', did: [], conclusion: '', questions: [], needsMe: [], parent: null, resolved: [] },
+]
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const playThree = async ($: any, clock: { settle: () => Promise<void> }) => {
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  for (const turnId of ['t1', 't2', 't3']) {
+    await $.turn.start({ text: '做点事', turnId })
+    await $.turn.complete({ answer: '好了', durationMs: 1000, isAborted: false, turnId, reason: 'answer', usage: { ...USAGE, model: 'claude-opus-5-5' } })
+    await clock.settle()
+  }
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const ruler = async (ui: any) => ((await ui.findAll({ type: 'Text', in: 'ruler' })) as { text?: string }[]).map(t => t.text ?? '')
+
+test('刻度尺：一轮一格，等我的高、了结的矮、光标那一轮满格；点一格光标跳过去，当前视图里没有就换到「全部」', async ($, on) => {
+  const clock = engine(on, [], {}, RULER_REPLIES())
+  await playThree($, clock)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  // 1 号视图「需要我做的」：光标默认在最新一行，是第 2 轮的那一条
+  await ui.key({ key: '1', in: 'tree' })
+  expect(await ruler(ui)).toEqual(['▁', '█', '▁'])
+  // 点第 3 格：第 3 轮不在「需要我做的」里，换到「全部」，光标落在它上面
+  await ui.pointer({ type: 'down', x: 2, y: 0, button: 'left', in: 'ruler' })
+  expect(await ruler(ui)).toEqual(['▁', '▅', '█'])
+  const texts = (await ui.findAll({ type: 'Text', in: 'tree' })) as { text?: string; props?: { inverse?: boolean } }[]
+  const i = texts.findIndex(t => t.props?.inverse === true)
+  expect(texts.slice(i).find(t => /改按钮颜色/.test(t.text ?? ''))).toBeDefined()
+  // 终端不跟着鼠标鼓起来，也没有标题那一行
+  await ui.pointer({ type: 'move', x: 0, y: 0, in: 'ruler' })
+  expect(await ruler(ui)).toEqual(['▁', '▅', '█'])
+  await ui.unmount()
+})
+
+test('刻度尺（桌面版）：鼠标扫过时那一格和邻居鼓起来，下面显示它的标题；移开就回去', async ($, on) => {
+  const clock = engine(on, [], {}, RULER_REPLIES())
+  await playThree($, clock)
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui.press({ key: 'view-all' })
+  // 光标默认在最新一行（第 3 轮）；没悬停时下面那行是光标那一轮的标题
+  expect(await ruler(ui)).toEqual(['▁', '▅', '█', '#3 改按钮颜色'])
+  await ui.pointer({ type: 'move', x: 0, y: 0, in: 'ruler' })
+  expect(await ruler(ui)).toEqual(['▄', '▇', '█', '#1 修 Hexo 部署'])
+  await ui.pointer({ type: 'leave', x: 0, y: 0, in: 'ruler' })
+  expect(await ruler(ui)).toEqual(['▁', '▅', '█', '#3 改按钮颜色'])
+  await ui.unmount()
+})
+
+test('刻度尺：轮数比面板宽时几轮并一格，挑等我的那轮代表', () => {
+  const block = (turn: number, status: string, needsMe: string[] = []) =>
+    ({ id: `b${turn}`, kind: 'turn', turn, ask: '', title: `第 ${turn} 轮`, status, did: [], conclusion: '', questions: [], needsMe, parent: null, isManual: false, isStatusManual: false, isPending: false, files: [], commands: 0 }) as never
+  const list = [block(1, 'DONE'), block(2, 'WAITING', ['确认']), block(3, 'DONE'), block(4, 'DONE')]
+  const ticks = rulerTicks(list, 'b4', 2)
+  expect(ticks.map(t => [t.id, t.turns, t.height])).toEqual([['b2', '#1–#2', 4], ['b4', '#3–#4', 7]])
+})
+
+test('层级不往下套：母块太深就往上提，最多 3 层；重新排版只认更早的一轮，手动改过的、子任务不动，模型漏掉的留在原处', () => {
+  const list = [savedBlock('b1', null), savedBlock('b2', 'b1'), savedBlock('b3', 'b2'), savedBlock('b4', 'b3', { isManual: true }), { ...savedBlock('b4.1', 'b4'), kind: 'agent' }, savedBlock('b5', 'b4'), savedBlock('b6', 'b1')] as never[]
+  expect(clampParent(list, 'b1')).toBe('b1')
+  expect(clampParent(list, 'b2')).toBe('b2')
+  // b3 已经在第 2 层，挂它下面会到第 3 层：提到它的母块 b2
+  expect(clampParent(list, 'b3')).toBe('b2')
+  expect(clampParent(list, 'b4')).toBe('b2')
+  expect(clampParent(list, 'b9')).toBe(null)
+  expect(clampParent(list, null)).toBe(null)
+
+  const out = relayout(list, { b1: 'b6', b2: null, b3: 'b2', b4: null, 'b4.1': null, b5: 'b4' }) as unknown as { id: string; parent: string | null }[]
+  const parentOf = (id: string) => out.find(b => b.id === id)?.parent
+  // 挂到后面的一轮不认，放顶层
+  expect(parentOf('b1')).toBe(null)
+  expect(parentOf('b2')).toBe(null)
+  expect(parentOf('b3')).toBe('b2')
+  // 手动改过的、子任务不动
+  expect(parentOf('b4')).toBe('b3')
+  expect(parentOf('b4.1')).toBe('b4')
+  // b4 在第 2 层，b5 提到第 1 层的 b3 下面
+  expect(parentOf('b5')).toBe('b3')
+  // 模型漏掉的留在原来的母块下面
+  expect(parentOf('b6')).toBe('b1')
+})
+
+test('同一话题一轮套一轮时总结只挂到第 3 层；M 按话题重新排版，下一轮之前再按 M 撤销，新的一轮开始后 M 又是重新排版', async ($, on) => {
+  const reply = (title: string, parent: string | null) => ({ title, status: 'TODO', did: [], conclusion: '', questions: [], needsMe: [], parent, resolved: [] })
+  const layout = (parents: Record<string, string | null>) => ({ parents })
+  const copied: string[] = []
+  const clock = engine(on, copied, {}, [
+    reply('第一轮', null),
+    reply('第二轮', 'b1'),
+    reply('第三轮', 'b2'),
+    reply('第四轮', 'b3'),
+    layout({ b1: null, b2: 'b1', b3: 'b1', b4: null }),
+    layout({ b1: null, b2: 'b1', b3: 'b1', b4: null }),
+    reply('第五轮', 'b4'),
+    layout({ b1: null, b2: 'b1', b3: 'b2', b4: 'b3', b5: 'b4' }),
+  ])
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  const run = async (turnId: string) => {
+    await $.turn.start({ text: '接着做', turnId })
+    await $.turn.complete({ answer: '好了', durationMs: 1000, isAborted: false, turnId, reason: 'answer', usage: { ...USAGE, model: 'claude-opus-5-5' } })
+    await clock.settle()
+  }
+  for (const turnId of ['t1', 't2', 't3', 't4']) await run(turnId)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await ui.press({ key: 'view-all' })
+  // 导出的 Markdown 按层级缩进，每层两格
+  const depthOf = async (title: string) => {
+    await act(ui, 'export')
+    const line = copied.at(-1)!.split('\n').find(l => l.endsWith(title))!
+    return (line.length - line.trimStart().length) / 2
+  }
+  // 第四轮想挂在第三轮（第 2 层）下面，提到第二轮下面
+  expect(await depthOf('第三轮')).toBe(2)
+  expect(await depthOf('第四轮')).toBe(2)
+
+  await act(ui, 'relayout')
+  await clock.settle()
+  expect(await depthOf('第三轮')).toBe(1)
+  expect(await depthOf('第四轮')).toBe(0)
+
+  // 再按一次是撤销
+  await act(ui, 'relayout')
+  expect(await depthOf('第三轮')).toBe(2)
+  expect(await depthOf('第四轮')).toBe(2)
+
+  await act(ui, 'relayout')
+  await clock.settle()
+  expect(await depthOf('第四轮')).toBe(0)
+  // 新的一轮开始以后不能撤销了，M 又是重新排版；模型排得太深照样往上提
+  await run('t5')
+  await act(ui, 'relayout')
+  await clock.settle()
+  for (const title of ['第三轮', '第四轮', '第五轮']) expect(await depthOf(title)).toBe(2)
+  await ui.unmount()
 })

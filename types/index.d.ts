@@ -51,6 +51,8 @@ export type Block = {
   reviewBlocked?: true
   /** 标了 Done 之后被我重新打开过 */
   isReopened?: true
+  /** 我这一轮问的问题，写成问句；这一轮不是在提问就是空串。加这个字段之前总结的块没有 */
+  myQuestion?: string
   conclusion: string
   questions: string[]
   /** 需要我做什么；解决后保留，按状态显示成已完成 */
@@ -144,6 +146,10 @@ declare module 'claude-code' {
       folded: string[]
       /** 整棵都了结、本该自动折起来，但我手动打开过的块：不再自动折 */
       unfolded: string[]
+      /** 我展开过的「…」里的块：这次会话里不再折进「…」 */
+      shownRuns: string[]
+      /** F 一键收起已完成：整棵了结的顶层块全折进「…」 */
+      doneFolded: boolean
       /** 光标刚离开的块（连同祖先）先别自动折，到这个时间为止 */
       lingering: Record<string, number>
       /** 滚轮在面板上滚过的格数，累加；交给大纲树自己翻 */
@@ -159,6 +165,8 @@ declare module 'claude-code' {
       query: string
       /** 搜索框露出来了（按 / 打开，清空后回车收起） */
       searching: boolean
+      /** 正在回复的那一行（按 A 打开回复框，回车发出或空着回车收起）；null 是没在回复 */
+      replyTo: string | null
       /** 「长期没动」的提示里我点过「不用」的块，不再为它们提示 */
       staleSkipped: string[]
       zoom: string | null
@@ -177,6 +185,8 @@ declare module 'claude-code' {
       metricsAll: Metrics | null
       /** 会话的名字（自动起的或 /rename 改的），画在大纲最上面；还没有名字时是 null */
       sessionTitle: string | null
+      /** 重新排版之前每一轮挂在哪（块 id → 母块 id），下一轮开始之前按 M 撤销用；null 是没得撤销 */
+      undoLayout: Record<string, string | null> | null
     }
   }
 }

@@ -23,8 +23,11 @@ const spun = (status: string, frame: number) => {
   return `${SPIN[frame % SPIN.length] ?? first}${rest.join('')}`
 }
 
-/** top：窗口从第几行（终端的行，不是块）开始；wheel：上次看到的滚轮累计格数；at：上次画的时候光标在第几块；isWheeled：光标上次动过以后用滚轮翻过 */
-type State = { top: number; menu: number | null; frame: number; wheel?: number; at?: number; isWheeled?: boolean }
+/**
+ * top：窗口从第几行（终端的行，不是块）开始；wheel：上次看到的滚轮累计格数；at：上次画的时候光标在第几块；isWheeled：光标上次动过以后用滚轮翻过；
+ * view：上次画的是哪个视图；isCentered：光标那块正放在窗口中间（刚打开视图、光标在最新一行时），光标一动或者滚轮一翻就不再居中
+ */
+type State = { top: number; menu: number | null; frame: number; wheel?: number; at?: number; isWheeled?: boolean; view?: string; isCentered?: boolean }
 
 /** 摊平以后的一项：哪一块的、从第几行开始、占几行（菜单一整个算一项，不切半个）；gap 是块前面的空行，menu 是回车菜单 */
 type Flat = { row: number; start: number; height: number; kind?: 'gap' | 'menu'; node: RenderElement }
@@ -125,10 +128,14 @@ const TreeView: ClientModule<TreeProps, State> = (props, surface) => {
   })
 
   const wheel = props.wheel ?? 0
-  const scrolled = (wheel - (surface.state?.wheel ?? wheel)) * WHEEL_LINES
+  const view = props.view ?? ''
+  // 刚打开这个视图（面板刚画出来，或者换了视图）
+  const isViewOpened = surface.state === undefined || surface.state.view !== view
+  const scrolled = isViewOpened ? 0 : (wheel - (surface.state?.wheel ?? wheel)) * WHEEL_LINES
   const isCursorMoved = surface.state === undefined || surface.state.at !== at
   // 滚轮翻过以后，窗口停在翻到的地方，光标再动才拉回来；没翻过就和以前一样，光标那块始终在窗口里
-  const isWheeled = scrolled !== 0 || (surface.state?.isWheeled === true && !isCursorMoved)
+  const isWheeled = scrolled !== 0 || (surface.state?.isWheeled === true && !isCursorMoved && !isViewOpened)
+  const isCentered = !isWheeled && (isViewOpened ? props.follow === true : surface.state?.isCentered === true && !isCursorMoved)
 
   // 窗口按行取，不按块：底下不会空出一截，翻也是一行一行地翻
   const lastTop = Math.max(0, total - room)
@@ -137,8 +144,10 @@ const TreeView: ClientModule<TreeProps, State> = (props, surface) => {
   if (at >= 0 && !isWheeled && own.length > 0) {
     const from = own[0]!.start
     const to = own.at(-1)!.start + own.at(-1)!.height
-    // 比窗口还高的块先露出开头；不然挪到刚好整块看得见
-    if (to - from > room || from < top) top = from
+    // 比窗口还高的块先露出开头；居中时放到窗口中间，可以越过列表末尾，下面空出来留给接下来的进展；不然挪到刚好整块看得见
+    if (to - from > room) top = from
+    else if (isCentered) top = Math.max(0, Math.round((from + to - room) / 2))
+    else if (from < top) top = from
     else if (to > top + room) top = to - room
   }
   // 菜单比窗口还高时也照画，从这一块的开头往下延伸，不能因为放不下就整个不见
@@ -146,16 +155,19 @@ const TreeView: ClientModule<TreeProps, State> = (props, surface) => {
   const below = total - (shown.length === 0 ? top : shown.at(-1)!.start + shown.at(-1)!.height)
 
   if (surface.state === undefined) {
-    surface.setState({ top, menu: null, frame: 0, wheel, at, isWheeled })
+    surface.setState({ top, menu: null, frame: 0, wheel, at, isWheeled, view, isCentered })
     // Doing 的圆圈箭头转起来：8 个角度，1.6 秒一圈（0.8 秒一圈太快，看着闪）
     surface.every(200, () => {
       if (hasSpinning) surface.setState({ ...(surface.state ?? { top: 0, menu: null, frame: 0 }), frame: ((surface.state?.frame ?? 0) + 1) % SPIN.length })
     })
-  } else if (surface.state.top !== top || surface.state.wheel !== wheel || surface.state.at !== at || surface.state.isWheeled !== isWheeled) {
-    surface.setState({ ...surface.state, top, wheel, at, isWheeled })
+  } else if (
+    surface.state.top !== top || surface.state.wheel !== wheel || surface.state.at !== at || surface.state.isWheeled !== isWheeled ||
+    surface.state.view !== view || surface.state.isCentered !== isCentered
+  ) {
+    surface.setState({ ...surface.state, top, wheel, at, isWheeled, view, isCentered })
   }
 
-  const set = (patch: Partial<State>) => surface.setState({ top, menu, frame, wheel, at, isWheeled, ...patch })
+  const set = (patch: Partial<State>) => surface.setState({ top, menu, frame, wheel, at, isWheeled, view, isCentered, ...patch })
   const runMenu = (i: number) => {
     const item = menuItems[i]
     set({ menu: null })

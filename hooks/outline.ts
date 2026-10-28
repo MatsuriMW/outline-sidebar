@@ -6,17 +6,17 @@ import { STATUS_INFO, isForMe, isOpenStatus, statusText } from './status'
 export { STATUSES, STATUS_GAP, STATUS_INFO, isForMe, isOpenStatus, nextBadStatus, nextStatus, normalizeStatus, statusText } from './status'
 
 export const VIEW_INFO: Record<View, { label: string; aliases: string[] }> = {
-  conclusions: { label: '结论', aliases: ['concl', 'conclusion'] },
   me: { label: '需要我做的', aliases: ['todo'] },
+  conclusions: { label: '问题与结论', aliases: ['qa', 'questions', 'concl', 'conclusion'] },
   asks: { label: '我让它做的', aliases: ['ask'] },
-  all: { label: '全部', aliases: [] },
   done: { label: '它已做的', aliases: ['did'] },
+  all: { label: '全部', aliases: [] },
   tech: { label: '技术信息', aliases: ['stats'] },
 }
 
-export const DEFAULT_KEYS = 'conclusions,me,asks,all,done,tech'
+export const DEFAULT_KEYS = 'me,conclusions,asks,done,all,tech'
 
-/** 把配置里的 `conclusions,me,asks,…` 读成数字键的顺序；写错的跳过，漏掉的视图补在后面 */
+/** 把配置里的 `me,conclusions,asks,…` 读成数字键的顺序；写错的跳过，漏掉的视图补在后面 */
 export const parseKeys = (text: string): View[] => {
   const known = Object.keys(VIEW_INFO) as View[]
   const picked: View[] = []
@@ -133,6 +133,32 @@ export const ancestorsOf = (list: readonly Block[], b: Block) => {
   return chain
 }
 
+/** AI 挂层级最多挂到第几层（顶层是第 0 层）：同一话题接着聊的几轮是并列的，不该一轮套一轮往下长 */
+export const MAX_DEPTH = 2
+
+/** AI 选的母块太深就往上找祖先，让新块最多落在第 MAX_DEPTH 层；母块不在大纲里就放顶层 */
+export const clampParent = (list: readonly Block[], parent: string | null): string | null => {
+  const b = parent === null ? undefined : list.find(one => one.id === parent)
+  if (b === undefined) return null
+  const chain = [...ancestorsOf(list, b), b]
+  return chain[Math.min(chain.length, MAX_DEPTH) - 1]!.id
+}
+
+/**
+ * 一键重新排版：按模型给的「块 id → 母块 id」重挂 AI 排的那些轮。母块只认更早的一轮（不会成环，也不会把前面的挂到后面），
+ * 太深的照 clampParent 往上挪；手动改过层级的块、子任务这类分支不动，模型漏掉的块留在原来的母块下面
+ */
+export const relayout = (list: readonly Block[], parents: Readonly<Record<string, unknown>>): Block[] => {
+  const out = [...list]
+  out.forEach((b, i) => {
+    if (b.kind !== 'turn' || b.isManual) return
+    const want = parents[b.id] === undefined ? b.parent : parents[b.id]
+    const at = typeof want === 'string' ? out.findIndex(one => one.id === want) : -1
+    out[i] = { ...b, parent: at >= 0 && at < i && out[at]!.kind === 'turn' ? clampParent(out, out[at]!.id) : null }
+  })
+  return out
+}
+
 /**
  * 后来的对话了结了这一块里等我的事，按条改：我自己说的（user）直接 Done；Claude 说替我办了的（claude）改成 ToReview 等我看。
  * 都打上「自动」的记号；我手动改过的条目和块不动。条目全了结、而且都是我说的，块也跟着 Done
@@ -178,16 +204,32 @@ export const matches = (b: Block, v: View) => {
   if (v === 'me') return b.needsMe.length > 0 || isForMe(b.status)
   if (v === 'asks') return b.kind === 'turn' || b.kind === 'btw'
   if (v === 'done') return b.did.length > 0 || b.files.length > 0 || (b.kind !== 'turn' && b.kind !== 'recap' && b.conclusion !== '')
-  if (v === 'conclusions') return b.conclusion !== ''
+  if (v === 'conclusions') return b.conclusion !== '' || questionOf(b) !== ''
   if (v === 'tech') return b.tech !== undefined
   return true
+}
+
+/**
+ * 我这一轮问的问题（问句），这一轮不是在提问就是空串。总结时模型写的；
+ * 加这个字段之前总结的块没有，原话以问号结尾的拿原话顶上；/btw 本来就是问题
+ */
+export const questionOf = (b: Block) => {
+  if (b.myQuestion !== undefined) return b.myQuestion
+  const said = b.ask.replace(/\s+/g, ' ').trim()
+  return b.kind === 'btw' || /[?？]$/.test(said) ? clip(said, 60) : ''
+}
+
+/** 块在某个视图里的标题：「问题与结论」里，我问过问题的块拿问句当标题，下面跟着结论 */
+export const titleIn = (b: Block, v: View) => {
+  const q = v === 'conclusions' ? questionOf(b) : ''
+  return q !== '' ? q : b.title
 }
 
 /** 搜索：标题、原话、做了、结论、问题、「需要我做」里有没有这个词（不分大小写） */
 export const searchHit = (b: Block, query: string) => {
   const q = query.trim().toLowerCase()
   if (q === '') return true
-  return [b.title, b.ask, b.conclusion, ...b.did, ...b.questions, ...b.needsMe].some(text => text.toLowerCase().includes(q))
+  return [b.title, b.ask, b.myQuestion ?? '', b.conclusion, ...b.did, ...b.questions, ...b.needsMe].some(text => text.toLowerCase().includes(q))
 }
 
 /** 隔了这么多轮还开着、状态没人动过，算「长期没动」 */
@@ -244,9 +286,18 @@ export type Row = {
   cont: string
   /** 顶层话题（第一个除外）前空一行，让一个话题和它的子块聚成一团 */
   isGap: boolean
+  /** 这一行是一串整棵都了结的顶层块折成的「…」：这一串的块 id；block 是这一串的第一块 */
+  more?: string[]
 }
 
 export const itemKey = (blockId: string, index: number) => `${blockId}#${index}`
+
+/** 「…」那一行的 id：这一串第一块的 id 前面加 more:，不会和块、条目的 id 撞上 */
+export const moreKey = (blockId: string) => `more:${blockId}`
+/** 「…」那一行的标题 */
+export const moreTitle = (count: number) => `已了结 ${count} 块（→ 展开）`
+/** 是「…」那一行的话，给出这一串第一块的 id */
+export const moreRunId = (key: string | null) => (key?.startsWith('more:') === true ? key.slice('more:'.length) : undefined)
 
 export const parseKey = (key: string) => {
   const at = key.lastIndexOf('#')
@@ -267,8 +318,15 @@ const isSettledTree = (list: readonly Block[], b: Block): boolean =>
 /** 自动折叠只在看当前进度的视图里生效 */
 const AUTO_FOLD_VIEWS: readonly View[] = ['me', 'asks', 'all']
 
-/** 自动折叠：整棵都了结的块折起来，除了我手动打开过的（unfolded）和先别折的（hold：光标所在的块、它的祖先、光标刚离开还在缓冲的） */
-export type AutoFold = { unfolded: readonly string[]; hold: readonly string[] }
+/**
+ * 自动折叠：整棵都了结的块折起来，除了我手动打开过的（unfolded）和先别折的（hold：光标所在的块、它的祖先、光标刚离开还在缓冲的）。
+ * 这样的顶层块连着 MORE_MIN 块以上，整串再折成一行「…」；我展开过的「…」里的块（shownRuns）不再折进去。
+ * isDoneFolded（F 一键收起已完成）：整棵了结的顶层块不管连着几块、是不是最新那块、光标在不在上面，都折进「…」
+ */
+export type AutoFold = { unfolded: readonly string[]; hold: readonly string[]; shownRuns: readonly string[]; isDoneFolded?: boolean }
+
+/** 连着几块整棵都了结的顶层块，才折成「…」 */
+const MORE_MIN = 3
 
 /**
  * 按视图把树摊成可见的行。除「全部」外都是 sparse tree：命中的块和它们的祖先，其余不显示。
@@ -276,7 +334,7 @@ export type AutoFold = { unfolded: readonly string[]; hold: readonly string[] }
  * query（搜索）：还得含这个词才算命中，「全部」视图也一样摊成 sparse tree
  */
 export const visibleRows = (list: readonly Block[], v: View, folded: readonly string[], zoom: string | null, open: readonly string[] = [], hideDone = false, auto?: AutoFold, query = ''): Row[] => {
-  // 「结论」「它已做的」「技术信息」本来就是看做完的事，不自动折
+  // 「问题与结论」「它已做的」「技术信息」本来就是看做完的事，不自动折
   const isAutoFolded = (b: Block) =>
     auto !== undefined && AUTO_FOLD_VIEWS.includes(v) && !auto.unfolded.includes(b.id) && !auto.hold.includes(b.id) && isSettledTree(list, b)
   const isFiltered = v !== 'all' || hideDone || query.trim() !== ''
@@ -322,7 +380,24 @@ export const visibleRows = (list: readonly Block[], v: View, folded: readonly st
     if (!isFolded) kids.forEach((kid, i) => walk(kid, depth + 1, below, i === kids.length - 1))
   }
   const top = shown(zoom === null ? childrenOf(list, null) : list.filter(b => b.id === zoom))
-  top.forEach((b, i) => walk({ block: b }, 0, '', i === top.length - 1))
+  // 大纲上半截一长串整棵都了结的顶层块折成一行「…」；最新那块总留着，搜索和聚焦时不折。一键收起已完成时只看整棵了结没有
+  const canMore = auto !== undefined && zoom === null && query.trim() === ''
+  const isDoneFolded = auto?.isDoneFolded === true
+  const inRun = (b: Block, i: number) =>
+    !auto!.shownRuns.includes(b.id) && (isDoneFolded ? AUTO_FOLD_VIEWS.includes(v) && isSettledTree(list, b) : i < top.length - 1 && isAutoFolded(b))
+  let i = 0
+  while (i < top.length) {
+    let end = i
+    while (canMore && end < top.length && inRun(top[end]!, end)) end++
+    if (end - i >= (isDoneFolded ? 1 : MORE_MIN)) {
+      const run = top.slice(i, end).map(b => b.id)
+      rows.push({ block: top[i]!, key: moreKey(top[i]!.id), depth: 0, isContext: false, hasChildren: false, isFolded: true, prefix: '', cont: '  ', isGap: rows.length > 0, more: run })
+      i = end
+    } else {
+      walk({ block: top[i]! }, 0, '', i === top.length - 1)
+      i++
+    }
+  }
   return rows
 }
 
@@ -460,7 +535,7 @@ export const toMarkdown = (list: readonly Block[], rows: readonly Row[], v: View
       continue
     }
     const badge = KIND_BADGE[b.kind]
-    out.push(`${pad}- ${STATUS_INFO[b.status].label} ${badge === undefined ? '' : `[${badge.text}] `}${b.title}${row.isContext ? '（上下文）' : ''}`)
+    out.push(`${pad}- ${STATUS_INFO[b.status].label} ${badge === undefined ? '' : `[${badge.text}] `}${titleIn(b, v)}${row.isContext ? '（上下文）' : ''}`)
     if (row.isContext) continue
     for (const line of blockLines(b, v, open.includes(b.id))) {
       const indent = line.level === 1 ? '    ' : '  '
@@ -574,7 +649,54 @@ export type TreeProps = {
   scope?: 'tabs' | 'tree'
   /** 滚轮在面板上滚过的格数，一直累加；树看它和上次差多少，就往下（正）或往上（负）翻几行 */
   wheel?: number
+  /** 现在是哪个视图：树看它换没换，换了（或刚画出来）就算刚打开这个视图 */
+  view?: View
+  /** 光标在这个视图的最新一行（默认状态）：刚打开视图时树把它放到窗口中间 */
+  follow?: boolean
 }
+
+// ---------- 刻度尺：整场会话一轮一格 ----------
+
+/**
+ * 一格的高低（0～7，对应 ▁▂▃▄▅▆▇█）：了结的最矮，还开着的高一点，等我的更高，光标所在那一轮顶满。
+ * 桌面版悬停时在这个基础上往上加，像 Dock 那样鼓起来
+ */
+export type Tick = { id: string; turns: string; title: string; color: string; height: number; isAt: boolean }
+
+export type RulerProps = { ticks: Tick[]; isHover: boolean }
+
+/** 光标所在的那一轮：光标在「需要我做」的条目、子任务、「…」上时，往上找到它属于的那一轮 */
+export const turnOf = (list: readonly Block[], key: string | null) => {
+  if (key === null) return undefined
+  let b = list.find(one => one.id === (moreRunId(key) ?? parseKey(key).blockId))
+  while (b !== undefined && b.kind !== 'turn') b = b.parent === null ? undefined : list.find(one => one.id === b!.parent)
+  return b?.id
+}
+
+/** 刻度尺的格子：一轮一格，按轮次排；轮数比格子多时几轮并一格，挑最要紧的那轮代表它们（等我的 > 还开着的 > 最后一轮） */
+export const rulerTicks = (list: readonly Block[], cursorKey: string | null, columns: number): Tick[] => {
+  const turns = list.filter(b => b.kind === 'turn').sort((a, b) => a.turn - b.turn)
+  const per = Math.max(1, Math.ceil(turns.length / Math.max(1, columns)))
+  const at = turnOf(list, cursorKey)
+  const ticks: Tick[] = []
+  for (let i = 0; i < turns.length; i += per) {
+    const group = turns.slice(i, i + per)
+    const b = group.find(hasOpenForMe) ?? group.find(one => isOpenStatus(one.status)) ?? group.at(-1)!
+    const isAt = group.some(one => one.id === at)
+    ticks.push({
+      id: b.id,
+      turns: group.length === 1 ? `#${b.turn}` : `#${group[0]!.turn}–#${group.at(-1)!.turn}`,
+      title: b.title === '' ? UNTITLED : b.title,
+      color: STATUS_INFO[b.status].color,
+      height: isAt ? 7 : hasOpenForMe(b) ? 4 : isOpenStatus(b.status) ? 2 : 0,
+      isAt,
+    })
+  }
+  return ticks
+}
+
+/** 视图里最新的一行（最底下那条不是只当上下文的）：光标的默认位置，也就是正在做的事 */
+export const latestKey = (rows: readonly Row[]) => rows.filter(r => !r.isContext).at(-1)?.key
 
 export const toTreeRows = (rows: readonly Row[], v: View, open: readonly string[], cursor: string | null, now = 0, selected: readonly string[] = []): TreeRow[] =>
   rows.map(row => {
@@ -599,6 +721,7 @@ export const toTreeRows = (rows: readonly Row[], v: View, open: readonly string[
       const isAuto = b.needsMeAuto?.[row.item.index] != null
       return { ...common, isItem: true, arrow: ITEM_MARK, status: statusText(st), ...(isAuto ? { tag: AUTO_TAG } : {}), title: row.item.text, isContext: false, lines: [] }
     }
+    if (row.more !== undefined) return { ...common, arrow: '▸', status: '…', isOpen: false, isClosed: true, title: moreTitle(row.more.length), isContext: false, lines: [] }
     const badge = KIND_BADGE[b.kind]
     const lines = row.isContext ? [] : blockLines(b, v, open.includes(b.id), now)
     return {
@@ -607,7 +730,7 @@ export const toTreeRows = (rows: readonly Row[], v: View, open: readonly string[
       status: b.isPending ? `${glyph('note')} …` : statusText(st),
       ...(badge === undefined ? {} : { badge }),
       ...(b.autoResolved === undefined ? {} : { tag: AUTO_TAG }),
-      title: b.title === '' ? UNTITLED : b.title,
+      title: titleIn(b, v) || UNTITLED,
       isContext: row.isContext,
       lines: lines.map(line => ({
         text: line.bullet === true ? (line.parts[0]?.text ?? '') : lineText(line),
