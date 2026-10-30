@@ -490,7 +490,9 @@ export const techLines = (t: Tech): Line[] => {
 export const liveLines = (b: Block, now: number): Line[] => {
   const live = b.live
   if (live === undefined) return []
-  const parts: Part[] = [{ field: 'last', text: String(live.steps) }, { field: 'time', text: elapsed(now - live.startedAt) }]
+  // 步数不说明什么，不显示；跑了多久（卡没卡住）、改了几个文件才是要看的
+  const parts: Part[] = [{ field: 'time', text: elapsed(now - live.startedAt) }]
+  if (b.files.length > 0) parts.push({ field: 'files', text: `${b.files.length} 个文件` })
   if (live.isRefreshing === true) parts.push({ field: 'note', text: '…' })
   const lines: Line[] = [{ parts, color: 'claude' }]
   if (live.last !== '') lines.push(one('last', live.last))

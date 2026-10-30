@@ -382,7 +382,7 @@ test('回顾：接住 Claude Code 自带的 recap，也能按 r 生成大纲回�
   await ui.unmount()
 })
 
-test('进行中的一轮：实时步数，按 p 刷新出小结，结束后转成普通块', async ($, on) => {
+test('进行中的一轮：实时显示跑了多久、改了几个文件，按 p 刷新出小结，结束后转成普通块', async ($, on) => {
   const clock = engine(on, [])
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await $.turn.start({ text: '博客部署挂了，帮我看看', turnId: 't1' })
@@ -396,7 +396,7 @@ test('进行中的一轮：实时步数，按 p 刷新出小结，结束后转�
   await $.tool.call({ tool: 'Read', file_path: '/blog/_config.yml' } as never)
   await $.tool.call({ tool: 'Edit', file_path: '/blog/_config.yml', old_string: 'a', new_string: 'b' } as never)
   await clock.advance(1500)
-  expect(await has(/^2$/)).toBe(true)
+  expect(await has(/^1 个文件$/)).toBe(true)
   expect(await has(/^改 _config.yml$/)).toBe(true)
 
   // 一轮还没结束，手动刷新

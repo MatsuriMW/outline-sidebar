@@ -168,9 +168,6 @@ const ICON_PX = 14
 /** 桌面版工具栏上直接摆出来的几个，其余进「更多操作」下拉框 */
 const DESK_ACTIONS = ['done', 'yes', 'no', 'reply', 'jump', 'search']
 
-/** 桌面版状态那一列的宽度（格）：最长的 Hit Limit! 连图标也放得下，后面的标题才对得齐 */
-const DESK_STATUS_COL = 12
-
 /** 桌面版每深一层缩进几格（不画终端那套 │ ├─ 引导线：比例字体下竖线对不齐） */
 const DESK_INDENT = 2
 
@@ -192,10 +189,11 @@ function desktopLine(els: DesktopEls, line: Line, isDesktop: boolean) {
     <Box flexDirection="row" columnGap={1} flexWrap="wrap">
       {props.line.parts.map(part => {
         const svg = phosphorSvg(part.field, color)
+        // 图标顶对齐第一行字：字折成几行时图标不落到中间
         return (
-          <Box flexDirection="row" columnGap={1}>
-            {svg === undefined ? <Text>{glyph(part.field)}</Text> : <Svg source={svg} alt={FIELD[part.field].label} width={ICON_PX} height={ICON_PX} />}
-            {part.text !== '' && <Text color={props.line.color} dimColor={props.line.color === undefined}>{props.isDesktop ? breakable(part.text) : part.text}</Text>}
+          <Box flexDirection="row" columnGap={1} alignItems="flex-start" flexShrink={1} minWidth={0}>
+            {svg === undefined ? <Text>{glyph(part.field)}</Text> : <Box flexShrink={0} paddingTop="xs"><Svg source={svg} alt={FIELD[part.field].label} width={ICON_PX} height={ICON_PX} /></Box>}
+            {part.text !== '' && <Box flexShrink={1} minWidth={0}><Text color={props.line.color} dimColor={props.line.color === undefined}>{props.isDesktop ? breakable(part.text) : part.text}</Text></Box>}
           </Box>
         )
       })}
@@ -213,6 +211,17 @@ function desktopStatus(els: DesktopEls, status: Status, isFire: boolean, isConte
     <Box flexDirection="row" columnGap={1}>
       <Svg source={statusSvg(props.status, props.isFire)} alt={info.label} width={ICON_PX} height={ICON_PX} {...(isAnimated ? { isInteractive: true } : {})} />
       <Text color={info.color} size="footnote" weight={isOpenStatus(props.status) ? 'semibold' : 'regular'} dimColor={props.isContext === true}>{info.label}</Text>
+    </Box>
+  )
+}
+
+/** 桌面版大纲行里只画状态图标：只占一个图标宽，标题紧跟在后面，状态名挪到标题下面那行打头 */
+function desktopStatusIcon(els: DesktopEls, status: Status, isFire: boolean) {
+  const { Box, Svg } = els
+  const isAnimated = status === 'DOING' || isFire
+  return (
+    <Box flexShrink={0} paddingTop="xs">
+      <Svg source={statusSvg(status, isFire)} alt={STATUS_INFO[status].label} width={ICON_PX} height={ICON_PX} {...(isAnimated ? { isInteractive: true } : {})} />
     </Box>
   )
 }
@@ -1076,20 +1085,21 @@ async function toggleZoom($: EngineInterface) {
   await update($, zoom, () => (current !== null ? null : id === null ? null : parseKey(id).blockId))
 }
 
-async function exportView($: EngineInterface, v: View, path?: string) {
+async function exportView($: EngineInterface, v: View, isToFile = false) {
   const list = await read($, blocks)
   const rows = visibleRows(list, v, await read($, folded), await read($, zoom), [], await isHidingDone($))
   const now = new Date(await $.clock.now())
   const md = toMarkdown(list, rows, v, await read($, open), now.toISOString().slice(0, 16).replace('T', ' '))
   const count = rows.filter(r => !r.isContext).length
-  if (path !== undefined) {
-    await $.fs.write(path, md)
-    return `已导出「${VIEW_INFO[v].label}」视图（${count} 块）到 ${path}`
+  if (isToFile) {
+    // 文件名写死在调用里：官方目录要读得出这个 mod 只写这一个文件，不会写到设置、启动脚本这类别的工具要读的文件
+    await $.fs.write('outline-export.md', md)
+    return `已导出「${VIEW_INFO[v].label}」视图（${count} 块）到工作目录的 outline-export.md`
   }
   const copied = await $.ui.copy({ text: md })
   return copied.isCopied
     ? `已复制「${VIEW_INFO[v].label}」视图（${count} 块）的 Markdown`
-    : `复制失败（${copied.reason}），可以用 /outline export ${v} <文件路径> 存成文件`
+    : `复制失败（${copied.reason}），可以用 /outline export ${v} file 存成工作目录里的 outline-export.md`
 }
 
 /** G：对话滚到光标这一行的原文（跳到哪条见 jumpTarget） */
@@ -1524,24 +1534,23 @@ export const register: Register = (on, options) => {
   const keys = parseKeys(typeof options.views === 'string' ? options.views : DEFAULT_KEYS)
 
   // 会话的名字只在设置里那种 hook 的输入里有：开场、每条消息各带一份，改名了下一条消息就跟上
+  // 先记名字再原样放行，写成 return next(e) 官方目录才认得出这里不替用户做决定
   on('classic.SessionStart', async ($, e, next) => {
-    const result = await next(e)
     await noteTitle($, e.session_title)
-    return result
+    return next(e)
   })
 
   on('classic.UserPromptSubmit', async ($, e, next) => {
-    const result = await next(e)
     await noteTitle($, e.session_title)
-    return result
+    return next(e)
   })
 
   on('session.start', async ($, e, next) => {
     cwd = e.cwd
     await $.command.register({
       name: 'outline',
-      description: '打开会话大纲。可带视图名（me / conclusions / asks / done / all / tech），或 export [视图] [文件路径] 导出',
-      argumentHint: '[视图] | export [视图] [路径]',
+      description: '打开会话大纲。可带视图名（me / conclusions / asks / done / all / tech），或 export [视图] [file] 导出（带 file 存成工作目录的 outline-export.md）',
+      argumentHint: '[视图] | export [视图] [file]',
     })
     await $.command.register({ name: 'agenda', description: '所有会话里需要我做、还没办完的事' })
     await restore($)
@@ -1555,9 +1564,9 @@ export const register: Register = (on, options) => {
     if (words[0]?.toLowerCase() === 'export') {
       const named = words[1] === undefined ? undefined : viewFromArg(words[1])
       const v = named ?? (await read($, view))
-      const raw = words.slice(named === undefined ? 1 : 2).join(' ')
-      const path = raw === '' ? undefined : raw.startsWith('/') ? raw : `${cwd}/${raw}`
-      return { text: await exportView($, v, path) }
+      const rest = words.slice(named === undefined ? 1 : 2).join(' ')
+      if (rest !== '' && rest.toLowerCase() !== 'file') return { text: '导出只能复制，或者用 file 存到工作目录的 outline-export.md，不能指定路径' }
+      return { text: await exportView($, v, rest !== '') }
     }
     const chosen = words[0] === undefined ? undefined : viewFromArg(words[0])
     if (words[0] !== undefined && chosen === undefined) return { text: `没有「${words[0]}」这个视图。可选：${keys.join('、')}` }
@@ -1914,10 +1923,10 @@ export const register: Register = (on, options) => {
     }
 
     const header = (
-      <Box flexDirection="column">
+      <Box flexDirection="column" rowGap={isTerm ? 0 : 'sm'}>
         {/* 会话的名字当大纲的标题，顶格；终端只有一种字号，靠加粗突出 */}
         {title !== null && (
-          <Text bold size="title">
+          <Text bold size="heading">
             {title}
           </Text>
         )}
@@ -1942,7 +1951,7 @@ export const register: Register = (on, options) => {
             </Button>
           ))}
         </Box>
-        <Box flexWrap="wrap" columnGap={1} rowGap={isTerm ? 0 : 'xs'} alignItems="center" {...(isTerm ? {} : { marginTop: 'xs' as const })}>
+        <Box flexWrap="wrap" columnGap={1} rowGap={isTerm ? 0 : 'xs'} alignItems="center">
           {ACTIONS.filter(a => isTerm || Select === undefined || DESK_ACTIONS.includes(a.key)).map(a => (
             <Button key={a.key} plain hotkey={a.hotkey} onPress={() => runAction($, a.key)}>
               {actionLabel(a, zoomId !== null, isDoneFolded, canUndoLayout)}
@@ -2091,7 +2100,7 @@ export const register: Register = (on, options) => {
       <Box flexDirection="column" width={width}>
         {header}
         {/* 桌面版的刻度尺跟着鼠标鼓起来；VS Code、手机端没有 Client，不画 */}
-        {ticks.length > 0 && 'Client' in els && els.Client({ module: './ruler.tsx', key: RULER, props: { ticks, isHover: isDesktop }, width })}
+        {ticks.length > 0 && 'Client' in els && <Box marginBottom="sm">{els.Client({ module: './ruler.tsx', key: RULER, props: { ticks, isHover: isDesktop }, width })}</Box>}
         {empty !== undefined && <Text dimColor>{empty}</Text>}
         {rows.map(row => {
           const b = row.block
@@ -2145,19 +2154,40 @@ export const register: Register = (on, options) => {
                     {arrow}
                   </Button>
                 </Box>
-                <Box width={DESK_STATUS_COL} flexShrink={0}>
-                  {b.isPending && row.item === undefined ? <Text dimColor>…</Text> : drawStatus(st, row.isContext, row.item === undefined ? b.statusAt : undefined)}
-                </Box>
-                {badge !== undefined && <Text color={badge.color}>[{badge.text}]</Text>}
-                <Box flexGrow={1} flexShrink={1} minWidth={0}>
-                  <Text
-                    dimColor={row.isContext || (!isOpenRow && b.live === undefined)}
-                    strikethrough={st === 'CANCELLED'}
-                    bold={isAt || (isOpenRow && !row.isContext)}
-                    color={badge?.color}
-                  >
-                    {(isDesktop ? breakable : String)(row.item === undefined ? titleIn(b, v) || UNTITLED : row.item.text)}
-                  </Text>
+                {b.isPending && row.item === undefined ? (
+                  <Text dimColor>…</Text>
+                ) : desk === undefined ? (
+                  drawStatus(st, row.isContext, row.item === undefined ? b.statusAt : undefined)
+                ) : (
+                  desktopStatusIcon(desk, st, row.item === undefined && b.statusAt !== undefined && now - b.statusAt < FIRE_MS)
+                )}
+                {/* 标题和下面的字段行同在一列：字段行天然和标题左边对齐，不用按格数去凑 */}
+                <Box flexDirection="column" flexGrow={1} flexShrink={1} minWidth={0}>
+                  <Box flexDirection="row" columnGap={1}>
+                    {badge !== undefined && <Text color={badge.color}>[{badge.text}]</Text>}
+                    <Box flexShrink={1} minWidth={0}>
+                      <Text
+                        dimColor={row.isContext || (!isOpenRow && b.live === undefined)}
+                        strikethrough={st === 'CANCELLED'}
+                        bold={isAt || (isOpenRow && !row.isContext)}
+                        color={badge?.color}
+                      >
+                        {(isDesktop ? breakable : String)(row.item === undefined ? titleIn(b, v) || UNTITLED : row.item.text)}
+                      </Text>
+                    </Box>
+                  </Box>
+                  {/* 状态名打头，块接着第一行字段；上下文行只有图标 */}
+                  {desk !== undefined && !row.isContext && !(b.isPending && row.item === undefined) ? (
+                    <Box flexDirection="row" columnGap={1} alignItems="flex-start">
+                      <Text color={STATUS_INFO[st].color} size="footnote" weight={isOpenRow ? 'semibold' : 'regular'}>
+                        {STATUS_INFO[st].label}
+                      </Text>
+                      {lines[0] !== undefined && <Box flexShrink={1} minWidth={0}>{drawLine(lines[0], '')}</Box>}
+                    </Box>
+                  ) : (
+                    lines[0] !== undefined && drawLine(lines[0], '')
+                  )}
+                  {lines.slice(1).map(line => drawLine(line, ''))}
                 </Box>
                 {/* 浮在行尾、盖在标题上，不占位置：鼠标进出这一行时标题不会重新折行。底色用 inverseText（就是面板的底色） */}
                 {!row.isContext && (
@@ -2183,10 +2213,6 @@ export const register: Register = (on, options) => {
                   </Box>
                 )}
               </Box>
-              {/* 字段行和标题左边对齐：缩进 + 箭头 + 状态列 */}
-              {lines.map(line => (
-                <Box paddingLeft={row.depth * DESK_INDENT + 2 + 1 + DESK_STATUS_COL + 1}>{drawLine(line, '')}</Box>
-              ))}
             </Box>
           )
         })}

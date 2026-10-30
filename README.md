@@ -92,7 +92,7 @@ What it does not do: it does not constrain the agent. Guardrails, permissions, t
 
 ## Built for the terminal and CJK input methods
 
-It is tuned mainly for the **terminal** version of Claude Code: keyboard control, icon fonts and CJK layout are all adjusted for the terminal. The desktop app uses native buttons and SVG icons: blocks indent by level, statuses sit in their own column so titles line up, the current view is a filled button, the cursor row is shaded, hovering a row floats a small "Done / 原文" toolbar, and less common actions live in a "更多操作" dropdown. VS Code works too but has not been tuned.
+It is tuned mainly for the **terminal** version of Claude Code: keyboard control, icon fonts and CJK layout are all adjusted for the terminal. The desktop app uses native buttons and SVG icons: blocks indent by level, a status icon sits in front of each title so titles line up, with the status name leading the line underneath, the current view is a filled button, the cursor row is shaded, hovering a row floats a small "Done / 原文" toolbar, and less common actions live in a "更多操作" dropdown. VS Code works too but has not been tuned.
 
 <p align="center">
   <img src="docs/desktop-me.png" width="49%" alt="Desktop app, view 1: the cursor row is shaded and a hovered row floats Done / 原文">
@@ -134,7 +134,7 @@ A typical round trip:
 ### Commands
 
 - `/outline [view]`: open the outline pane, optionally at a given view. Views: me, conclusions, asks, done, all, tech
-- `/outline export [view] [path]`: export a view to a Markdown file
+- `/outline export [view] [file]`: copy a view as Markdown; with `file`, save it as `outline-export.md` in the working directory instead
 - `/agenda`: everything across all sessions that is waiting on me and not yet done
 
 ### Views (number keys)
@@ -309,11 +309,11 @@ After changing the code, run `/reload-plugins` in Claude Code.
 Everything you should know before installing is listed here, and all of it can be matched against the source:
 
 - **Calls a model to summarize**: after each turn it asks Haiku (through your own Claude Code session, on your account and quota) to summarize the turn. What gets sent: your prompt for the turn (first 2,000 characters), Claude's answer (first 4,000 characters), the files edited this turn (names only), the commands run and their last output line, subtask conclusions, and the titles of the existing outline. `P` (refresh progress) and `R` (recap) make one call each; `M` (re-layout) makes one call that sends the title and conclusion (first 60 characters) of every turn. The tokens spent are recorded separately in the technical info view as "the outline's own cost".
-- **Sends messages for you**: 4 seconds after a review is not approved, or after you answer a question with Y / N, it submits a message to Claude in this session on the mod's behalf; statuses you changed in the sidebar are attached to your next message.
-- **Runs a local program** (macOS only): it switches to the English keyboard when you click into the sidebar, and back to your original input method when you return to the prompt. This uses `tools/ascii-input.swift`, compiled with `swiftc` to `bin/input-source` on first use and run directly after that; the ID of the input source to switch to is passed on standard input, with no environment variables set. It only calls the macOS input source API and does not touch the network. Without the Xcode command line tools this step is skipped.
+- **Sends messages for you**: 4 seconds after a review is not approved, or after you answer a question with Y / N, it submits a message to Claude in this session on the mod's behalf; statuses you changed in the sidebar are attached to your next message. These messages go only to Claude in this same session, and they contain only: the titles of the outline items you just answered or reviewed (titles the outline already shows you), the status you gave each one, a fixed instruction for that status (written in `VERDICT` and `PARALLEL` in `hooks/register.tsx`), and a list of the statuses you changed (`item: old status → new status`). No file contents, session ids, paths or anything from outside the outline go into them.
+- **Runs a local program** (macOS only): it switches to the English keyboard when you click into the sidebar, and back to your original input method when you return to the prompt. This uses `tools/ascii-input.swift`, compiled with `swiftc` to `bin/input-source` on first use and run directly after that; the ID of the input source to switch to is passed on standard input, with no environment variables set. Standard input only ever carries one of two values: the fixed `com.apple.keylayout.US`, or the input source ID this same program printed a moment earlier (your original input method, to switch back to). Nothing from the conversation, the session or the outline is passed to any program. It only calls the macOS input source API and does not touch the network. Without the Xcode command line tools this step is skipped.
 - **What it reads**: the tool calls in this session (file names, commands and whether they succeeded, the last output line), to attach evidence to "done" items. It never reads file contents and never acts on what a tool returned.
-- **What it stores**: each session's outline, in the local storage Claude Code gives plugins (`~/.claude/plugins/store/`), up to 100 sessions; `/agenda` and the cross-session metrics read from there.
-- **What it writes**: only `/outline export` writes a file, to the path you give; `X` copies to the clipboard.
+- **What it stores**: each session's outline, keyed by the session id (the id is only used as this storage key and to tell the current session apart in `/agenda`; it is never sent anywhere), in the local storage Claude Code gives plugins (`~/.claude/plugins/store/`), up to 100 sessions; `/agenda` and the cross-session metrics read from there.
+- **What it writes**: one file only, `outline-export.md` in the working directory, and only when you run `/outline export [view] file`. The file name is fixed text in the call; it cannot be pointed at another path, so it never writes settings, start-up, build or instruction files. `X` copies to the clipboard.
 - **What it runs**: exactly three commands, each run in the plugin folder and written as fixed text in `hooks/register.tsx`: `./bin/input-source` (switches the input method), and `/bin/mkdir -p bin` plus `/usr/bin/swiftc -O tools/ascii-input.swift -o bin/input-source` (builds it on first use, tried at most once per load). It runs nothing else, and nothing taken from the network, a model reply or a tool call.
 - **What it does not do**: it makes no network requests of its own (no `$.http`), sends no telemetry, reads no credentials or API keys, does not change Claude Code's permission settings, does not run slash commands for you and does not call tools itself. Every "token" in the code means a count of model usage tokens; `www.w3.org` is the namespace of the desktop app's SVG icons and is never requested.
 
@@ -322,7 +322,7 @@ Everything you should know before installing is listed here, and all of it can b
 | Hook | What it does |
 |---|---|
 | `session.start` | Registers the `/outline` and `/agenda` commands, restores this session's outline from local storage and opens the sidebar |
-| `classic.SessionStart`, `classic.UserPromptSubmit` | Reads only the session name (`session_title`) and draws it as the title at the top of the outline; lets the event through unchanged, never blocks or edits it |
+| `classic.SessionStart`, `classic.UserPromptSubmit` | Reads only the session name (`session_title`) and draws it as the title at the top of the outline, then passes the event on unchanged with `return next(e)`: it never blocks, edits or answers it, and makes no permission decision |
 | `command.run` (`outline`, `agenda`) | Answers these two commands: opens the pane, exports the outline, collects open items |
 | `command.run` (`btw`) | `/btw` runs as usual; after it answers, a block is recorded in the outline. The command itself is not changed |
 | `turn.start`, `turn.complete` | Creates an "in progress" block when a turn starts; when it ends, records usage and asks Haiku to summarize |
