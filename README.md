@@ -92,14 +92,14 @@ What it does not do: it does not constrain the agent. Guardrails, permissions, t
 
 ## Built for the terminal and CJK input methods
 
-It is tuned mainly for the **terminal** version of Claude Code: keyboard control, icon fonts and CJK layout are all adjusted for the terminal. The desktop app uses native buttons and SVG icons: blocks indent by level, a status icon sits in front of each title so titles line up, with the status name leading the line underneath, the current view is a filled button, the cursor row is shaded, hovering a row floats a small "Done / 原文" toolbar, and less common actions live in a "更多操作" dropdown. VS Code works too but has not been tuned.
+It is tuned mainly for the **terminal** version of Claude Code: keyboard control, icon fonts and CJK layout are all adjusted for the terminal. The desktop app uses native buttons and SVG icons: blocks indent by level, a status icon sits in front of each title so titles line up, with the status name leading the line underneath, the current view is a filled button, the cursor row is shaded, the row under the pointer is lightly shaded, and less common actions live in a "更多操作" dropdown. VS Code works too but has not been tuned.
 
 <p align="center">
-  <img src="docs/desktop-me.png" width="49%" alt="Desktop app, view 1: the cursor row is shaded and a hovered row floats Done / 原文">
+  <img src="docs/desktop-me.png" width="49%" alt="Desktop app, view 1: the cursor row is shaded">
   <img src="docs/desktop-all.png" width="49%" alt="Desktop app, view 5: blocks indented by level, statuses in their own column">
 </p>
 
-> The sidebar in the Claude desktop app (light theme). Left: view 1, *What I need to do*, with the cursor on the first block and the pointer over "界面文字要不要改成中文？", which floats the Done / 原文 buttons. Right: view 5, *All*, for the same session.
+> The sidebar in the Claude desktop app (light theme). Left: view 1, *What I need to do*, with the cursor on the first block. Right: view 5, *All*, for the same session.
 
 In the terminal, keyboard shortcuts and Chinese input methods get in each other's way: letter keys like J/K, T and S are grabbed by the IME to compose characters, never reach the sidebar, and just pop up a candidate window. Almost every Chinese user has Pinyin or Squirrel (Rime) on, so a few things are handled specifically:
 

@@ -1,6 +1,6 @@
 {
   "name": "outline-sidebar",
-  "version": "0.11.1",
+  "version": "0.11.2",
   "description": "Outline Sidebar：把 Claude Code 会话变成 Logseq 式可折叠大纲侧边栏，一轮一块，按「需要我做的 / 问题与结论 / 我让它做的 / 它已做的 / 技术信息」过滤；「做了」挂工具调用证据，ToReview 先看证据再验收，侧栏改的状态回传给 Claude",
   "author": {
     "name": "MatsuriMW",

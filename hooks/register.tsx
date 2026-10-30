@@ -847,6 +847,8 @@ async function passesReview($: EngineInterface, b: Block, to: Status) {
   if (b.reviewedAt !== undefined && b.reviewedAt >= (b.statusAt ?? 0)) return true
   await update($, open, ids => (ids.includes(b.id) ? ids : [...ids, b.id]))
   await markReviewed($, b.id)
+  // 不说一声，看着就像按错了键：这一下只展开、不改状态
+  void $.ui.toast('待验收：先看一眼展开的证据，再按一次就验收通过')
   return false
 }
 
@@ -1104,10 +1106,15 @@ async function exportView($: EngineInterface, v: View, isToFile = false) {
 
 /** G：对话滚到光标这一行的原文（跳到哪条见 jumpTarget） */
 async function jump($: EngineInterface) {
-  const key = await read($, cursor)
+  // 还没动过光标时，面板上光标画在最新一行（见 shownAt），跳也从那一行跳
+  const key = (await read($, cursor)) ?? latestKey(await currentRows($)) ?? null
   const target = key === null ? undefined : jumpTarget(await read($, blocks), key)
-  if (target === undefined) return
-  await $.ui.scroll({ to: { requestId: target }, block: 'start' })
+  if (target === undefined) {
+    void $.ui.toast('这一块没记下原文在哪（可能是重新打开会话之前的块）')
+    return
+  }
+  const moved = await $.ui.scroll({ to: { requestId: target }, block: 'start' })
+  if (moved.deny !== undefined) void $.ui.toast(`跳不过去：${moved.deny}`)
 }
 
 /**
@@ -2129,12 +2136,8 @@ export const register: Register = (on, options) => {
             )
           }
           const st = row.item?.status ?? b.status
-          // 悬停时整行变色，行尾露出两个快捷按钮；同一个 scope 一起亮
+          // 悬停时整行变色
           const scope = `os-row-${row.key}`
-          const act = async (action: string) => {
-            await setCursor($, row.key)
-            await runAction($, action)
-          }
           const badge = row.item === undefined ? KIND_BADGE[b.kind] : undefined
           const isOpenRow = isOpenStatus(st)
           const lines = row.item !== undefined || row.isContext ? [] : blockLines(b, v, openIds.includes(b.id), now)
@@ -2148,7 +2151,8 @@ export const register: Register = (on, options) => {
               {...(isAt ? { backgroundColor: DESK_CURSOR_BG } : {})}
               hover={{ scope, backgroundColor: isAt ? DESK_CURSOR_BG : DESK_HOVER_BG }}
             >
-              <Box position="relative" flexDirection="row" alignItems="flex-start" columnGap={1} paddingLeft={row.depth * DESK_INDENT}>
+              {/* 桌面版的圆点本身是带内边距的按钮，再隔 1 格就空得比图标到标题还大：只隔最小一档 */}
+              <Box flexDirection="row" alignItems="flex-start" columnGap={desk === undefined ? 1 : 'xs'} paddingLeft={row.depth * DESK_INDENT}>
                 <Box width={2} flexShrink={0}>
                   <Button key={`block-${row.key}`} plain onPress={() => pick($, row.key)}>
                     {arrow}
@@ -2189,29 +2193,6 @@ export const register: Register = (on, options) => {
                   )}
                   {lines.slice(1).map(line => drawLine(line, ''))}
                 </Box>
-                {/* 浮在行尾、盖在标题上，不占位置：鼠标进出这一行时标题不会重新折行。底色用 inverseText（就是面板的底色） */}
-                {!row.isContext && (
-                  <Box
-                    display="none"
-                    hover={{ scope, display: 'flex' }}
-                    position="absolute"
-                    right={0}
-                    top={0}
-                    flexDirection="row"
-                    columnGap={1}
-                    paddingX={1}
-                    backgroundColor="inverseText"
-                    borderStyle="round"
-                    borderDimColor
-                  >
-                    <Button key={`quick-done-${row.key}`} plain onPress={() => act('done')}>
-                      Done
-                    </Button>
-                    <Button key={`quick-jump-${row.key}`} plain onPress={() => act('jump')}>
-                      原文
-                    </Button>
-                  </Box>
-                )}
               </Box>
             </Box>
           )
