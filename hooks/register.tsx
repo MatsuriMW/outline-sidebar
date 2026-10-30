@@ -168,6 +168,9 @@ const ICON_PX = 14
 /** 桌面版工具栏上直接摆出来的几个，其余进「更多操作」下拉框 */
 const DESK_ACTIONS = ['done', 'yes', 'no', 'reply', 'jump', 'search']
 
+/** 桌面版圆点、箭头那一列的宽度（格）：字形居中，2 格时右边空出将近 1 格，和状态图标隔得太远 */
+const DESK_ARROW_COL = 1
+
 /** 桌面版每深一层缩进几格（不画终端那套 │ ├─ 引导线：比例字体下竖线对不齐） */
 const DESK_INDENT = 2
 
@@ -2118,12 +2121,12 @@ export const register: Register = (on, options) => {
               <Box
                 key={`row-${row.key}`}
                 flexDirection="row"
-                columnGap={1}
+                columnGap={desk === undefined ? 1 : 'xs'}
                 marginTop={row.isGap ? 'sm' : 0}
                 paddingY={desk === undefined ? 0 : 'xs'}
                 {...(isAt ? { backgroundColor: DESK_CURSOR_BG } : {})}
               >
-                <Box width={2} flexShrink={0}>
+                <Box width={desk === undefined ? 2 : DESK_ARROW_COL} flexShrink={0}>
                   <Button key={`block-${row.key}`} plain onPress={() => pick($, row.key)}>
                     ▸
                   </Button>
@@ -2151,9 +2154,8 @@ export const register: Register = (on, options) => {
               {...(isAt ? { backgroundColor: DESK_CURSOR_BG } : {})}
               hover={{ scope, backgroundColor: isAt ? DESK_CURSOR_BG : DESK_HOVER_BG }}
             >
-              {/* 桌面版的圆点本身是带内边距的按钮，再隔 1 格就空得比图标到标题还大：只隔最小一档 */}
               <Box flexDirection="row" alignItems="flex-start" columnGap={desk === undefined ? 1 : 'xs'} paddingLeft={row.depth * DESK_INDENT}>
-                <Box width={2} flexShrink={0}>
+                <Box width={desk === undefined ? 2 : DESK_ARROW_COL} flexShrink={0}>
                   <Button key={`block-${row.key}`} plain onPress={() => pick($, row.key)}>
                     {arrow}
                   </Button>
