@@ -45,6 +45,10 @@ import {
   relayout,
   rulerTicks,
   staleBlocks,
+  staleFacts,
+  isProven,
+  isResult,
+  itemKey,
   sumTech,
   techLines,
   type AutoFold,
@@ -144,7 +148,7 @@ const actionLabel = (a: (typeof ACTIONS)[number], isZoomed: boolean, isDoneFolde
   a.key === 'zoom' && isZoomed ? '退出聚焦' : a.key === 'fold-done' && isDoneFolded ? '恢复已完成' : a.key === 'relayout' && canUndoLayout ? '撤销排版' : a.label
 
 /** 图例里列出的字段 */
-const LEGEND_FIELDS = ['needsMe', 'did', 'proof', 'files', 'conclusion', 'question', 'resolved', 'ask', 'live', 'last', 'note', 'stats', 'tokens', 'cache', 'time', 'model', 'skills', 'mcp', 'slash', 'agents', 'outline', 'coverage', 'review', 'reopen', 'fix'] as const
+const LEGEND_FIELDS = ['needsMe', 'did', 'proof', 'files', 'conclusion', 'question', 'resolved', 'ask', 'live', 'last', 'note', 'stats', 'tokens', 'cache', 'time', 'model', 'skills', 'mcp', 'slash', 'agents', 'outline', 'coverage', 'verified', 'stale', 'review', 'reopen', 'fix'] as const
 
 /** 图例占几行（终端），用来算树视图还剩多少高度 */
 const legendRows = (width: number) =>
@@ -352,7 +356,9 @@ const SYSTEM = `你在给一段 Claude Code 会话做大纲。每次给你「现
 只输出一个 JSON 对象，不要任何别的文字，不要代码块标记。字段：
 - title：用户要 Claude Code 做什么，一句话，中文，不超过 30 字，动词开头
 - status：从下面选一个最贴切的关键词（照用户在 Obsidian todoseq 里的那一套）：${STATUS_LINES}
-- did：Claude Code 这一轮实际做了的事，数组，每条是 { "text": 一短句, "evidence": [证据编号] }；evidence 只能填下面「证据」里列出的编号，哪条证据能证明这件事做了就填哪条，没有能证明它的证据就填空数组，不许编；没做事就空数组
+- did：Claude Code 这一轮实际做了的事，数组，每条是 { "text": 一短句, "result": true 或 false, "evidence": [证据编号] }；没做事就空数组。
+  result：动作（改了、加了、删了、写了、建了什么）填 false；结果（说某件事现在成立：测试通过、构建成功、页面能打开、已经上线、bug 修好了、功能能用）填 true。
+  evidence 只能填下面「证据」里列出的编号，不许编：动作挂能证明它做了的那条；结果要挂专门检查它的那条命令（跑测试、构建、请求页面、运行脚本），光改文件证明不了结果；没有能证明它的证据就填空数组
 - userQuestion：用户这一轮如果是在提问（想知道是什么、为什么、怎么办、行不行），把他的问题写成一个问句，中文，不超过 40 字，以「？」结尾；用户是在让 Claude Code 做事、不是在提问，填空字符串
 - conclusion：这一轮定下来的结论，一句话；用户在提问的，写这个问题的结论；没有就空字符串
 - questions：还没解决的问题，没有就空数组
@@ -420,14 +426,16 @@ const evidenceText = (e: Evidence) => (e.kind === 'edit' ? `改了 ${e.text}${e.
 const parseDid = (value: unknown, count: number) => {
   const did: string[] = []
   const proofs: number[][] = []
+  const results: boolean[] = []
   for (const one of Array.isArray(value) ? value : []) {
-    const item = typeof one === 'string' ? { text: one, evidence: [] } : (one as { text?: unknown; evidence?: unknown })
+    const item = typeof one === 'string' ? { text: one, result: false, evidence: [] } : (one as { text?: unknown; result?: unknown; evidence?: unknown })
     if (typeof item.text !== 'string' || item.text === '') continue
     did.push(item.text)
+    results.push(item.result === true)
     const nums = Array.isArray(item.evidence) ? item.evidence.filter((n): n is number => Number.isInteger(n) && n >= 1 && n <= count) : []
     proofs.push([...new Set(nums)].map(n => n - 1))
   }
-  return { did, proofs }
+  return { did, proofs, results }
 }
 
 /** 一轮因 API 出错结束时，回答里出现这些字就当是撞上了用量上限（引擎在这里不给错误种类，只能看字） */
@@ -479,6 +487,7 @@ async function summarize($: EngineInterface, id: string, turn: Turn, answer: str
           did: didParsed.did,
           evidence: turn.evidence,
           didEvidence: didParsed.proofs,
+          didResult: didParsed.results,
           // 模型没给就留空，按原话猜（见 questionOf）
           myQuestion: typeof data?.userQuestion === 'string' ? data.userQuestion : undefined,
           conclusion: typeof data?.conclusion === 'string' ? data.conclusion : '',
@@ -899,9 +908,16 @@ async function changeRow($: EngineInterface, key: string, choose: (current: Stat
       if (b.id !== blockId) return b
       if (index === undefined) {
         const to = choose(b.status)
-        // 验收通过：告诉 Claude 是看过证据才通过的，没证据的那几条也说出来
-        const bare = b.did.filter((_, i) => b.didEvidence !== undefined && (b.didEvidence[i] ?? []).length === 0)
-        const checked = b.status === 'TOREVIEW' && to === 'DONE' ? `（用户看过证据后验收${bare.length > 0 ? `；其中这几条没有工具调用能证明：${bare.join('；')}` : ''}）` : ''
+        // 验收通过：告诉 Claude 是看过证据才通过的，站不住的那几条也说出来
+        const weak = (pick: (i: number) => boolean) => (b.didEvidence === undefined ? [] : b.did.filter((_, i) => pick(i)))
+        const stale = staleFacts(all)
+        const notes = [
+          ['其中这几条没有工具调用能证明', weak(i => !isResult(b, i) && !isProven(b, i))],
+          ['这几条结果没有命令验证过', weak(i => isResult(b, i) && !isProven(b, i))],
+          ['这几条结果验证后又改了相关文件，要复验', weak(i => stale.has(itemKey(b.id, i)))],
+        ] as const
+        const said = notes.flatMap(([what, items]) => (items.length > 0 ? [`；${what}：${items.join('；')}`] : [])).join('')
+        const checked = b.status === 'TOREVIEW' && to === 'DONE' ? `（用户看过证据后验收${said}）` : ''
         change = { key, what: `块 [${b.id}]「${b.title}」${checked}`, from: b.status, to }
         // 指标：验收放行 / 拦下，Done 之后重新打开（改成 Cancelled 不算返工）
         const marks: Partial<Block> = {}
@@ -1882,6 +1898,8 @@ export const register: Register = (on, options) => {
     const stale = staleBlocks(list).filter(b => !skipped.includes(b.id))
     const staleIds = stale.length >= STALE_MIN ? stale.map(b => b.id) : []
     const staleText = `${staleIds.length} 块隔了 ${STALE_TURNS} 轮以上还开着，没人动过`
+    // 验证过、后来又改了相关文件的结果
+    const staleDid = staleFacts(list)
     const now = await $.clock.now()
     const width = e.props.bodyColumns
     // 终端用图标字体；桌面（以及别的能画 SVG 的界面）用 SVG
@@ -2081,14 +2099,14 @@ export const register: Register = (on, options) => {
         (isLegend ? legendRows(width) : 0) +
         (zoomed === undefined ? 0 : 1) +
         (total === undefined ? 0 : 1 + techLines(total).length) +
-        (v === 'tech' ? 3 + (allMetrics === null ? 0 : 3) : 0) +
+        (v === 'tech' ? 4 + (allMetrics === null ? 0 : 4) : 0) +
         1
       const height = Math.max(6, e.props.scroll.bodyRows - headerRows)
       const wheelAt = await read($, wheel)
       const levelNow = await read($, level)
       paneRuler = ticks.length === 0 ? undefined : { ticks, isHover: false }
       paneTree = {
-        rows: toTreeRows(rows, v, openIds, shownAt, now, await selectedKeys($)),
+        rows: toTreeRows(rows, v, openIds, shownAt, now, await selectedKeys($), staleDid),
         height,
         scope: isTabs ? 'tabs' : 'tree',
         wheel: wheelAt,
@@ -2143,7 +2161,7 @@ export const register: Register = (on, options) => {
           const scope = `os-row-${row.key}`
           const badge = row.item === undefined ? KIND_BADGE[b.kind] : undefined
           const isOpenRow = isOpenStatus(st)
-          const lines = row.item !== undefined || row.isContext ? [] : blockLines(b, v, openIds.includes(b.id), now)
+          const lines = row.item !== undefined || row.isContext ? [] : blockLines(b, v, openIds.includes(b.id), now, staleDid)
           const arrow = row.item !== undefined ? ITEM_MARK : row.hasChildren ? (row.isFolded ? '▸' : '▾') : '•'
           return (
             <Box

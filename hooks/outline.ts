@@ -49,7 +49,7 @@ export const KIND_BADGE: Record<Kind, { text: string; color: string } | undefine
 
 export type Field =
   | 'needsMe' | 'did' | 'proof' | 'files' | 'conclusion' | 'question' | 'resolved' | 'ask'
-  | 'coverage' | 'review' | 'reopen' | 'fix'
+  | 'coverage' | 'verified' | 'stale' | 'review' | 'reopen' | 'fix'
   | 'stats' | 'tokens' | 'cache' | 'time' | 'model' | 'skills' | 'mcp' | 'slash' | 'agents' | 'outline' | 'live' | 'last' | 'note'
 
 export const FIELD: Record<Field, { icon: PhosphorIcon | Mark; label: string }> = {
@@ -61,7 +61,9 @@ export const FIELD: Record<Field, { icon: PhosphorIcon | Mark; label: string }> 
   question: { icon: 'question', label: '还没解决的问题' },
   resolved: { icon: 'resolved', label: '在第几轮解决' },
   ask: { icon: 'ask', label: '我的原话' },
-  coverage: { icon: 'proof', label: '证据覆盖率：「做了」里有证据的比例' },
+  coverage: { icon: 'proof', label: '动作有记录：「做了」里的动作有工具记录的比例' },
+  verified: { icon: 'resolved', label: '结果有验证：「做了」里的结果有跑成功的命令验证的比例' },
+  stale: { icon: 'past', label: '待复验：验证过、后来又改了相关文件的结果' },
   review: { icon: 'resolved', label: '验收拦下率：验收时没让通过的比例' },
   reopen: { icon: 'past', label: '返工率：标了 Done 又被重新打开的比例' },
   fix: { icon: 'pending', label: '手动纠正过层级的块' },
@@ -415,6 +417,44 @@ const one = (field: Field, text: string, extra: Partial<Line> = {}): Line => ({ 
 const group = (field: Field, items: readonly string[]): Line[] =>
   items.length <= 1 ? items.map(text => one(field, text)) : [one(field, ''), ...items.map(text => one(field, text, { level: 1, bullet: true }))]
 
+/** 「做了」第 i 条是不是结果（某件事现在成立），不是动作 */
+export const isResult = (b: Block, i: number) => b.didResult?.[i] === true
+
+const proofsOf = (b: Block, i: number) => (b.didEvidence?.[i] ?? []).map(n => b.evidence?.[n]).filter((e): e is Evidence => e !== undefined)
+
+/** 「做了」第 i 条站得住：动作挂上工具记录就算；结果要挂一条跑成功的命令，光改文件证明不了结果 */
+export const isProven = (b: Block, i: number) => {
+  const proofs = proofsOf(b, i)
+  return isResult(b, i) ? proofs.some(e => e.kind === 'run' && e.isOk) : proofs.length > 0
+}
+
+/** 一条结果依赖的文件：同一轮里、验证它的最后一条命令之前改过的文件 */
+const factFiles = (b: Block, i: number) => {
+  const all = b.evidence ?? []
+  const runs = (b.didEvidence?.[i] ?? []).filter(n => all[n]?.kind === 'run' && all[n]?.isOk === true)
+  if (runs.length === 0) return []
+  return all.slice(0, Math.max(...runs)).flatMap(e => (e.kind === 'edit' ? [e.text] : []))
+}
+
+/**
+ * 待复验的结果（key 是「块 id#第几条」）：验证过，但后来哪一轮又改了它依赖的文件。只比对文件名，不经过模型。
+ * 同一轮里没改文件就验证的（比如只查了线上页面），判断不了过没过期，不算
+ */
+export const staleFacts = (list: readonly Block[]): ReadonlySet<string> => {
+  const out = new Set<string>()
+  for (const b of list) {
+    if (b.kind !== 'turn' || b.didResult === undefined) continue
+    b.did.forEach((_, i) => {
+      if (!isResult(b, i) || !isProven(b, i)) return
+      const files = factFiles(b, i)
+      if (list.some(later => later.kind === 'turn' && later.turn > b.turn && later.files.some(f => files.includes(f)))) out.add(itemKey(b.id, i))
+    })
+  }
+  return out
+}
+
+const NO_STALE: ReadonlySet<string> = new Set()
+
 /** 一条证据：改了哪个文件；跑了哪条命令，✓ 成功 / ✗ 报错，→ 后面是输出的最后一行 */
 const evidenceLine = (e: Evidence): Line => {
   const text = e.kind === 'edit' ? `${e.isOk ? '' : '✗ '}改 ${e.text}` : `${e.isOk ? '✓' : '✗'} ${e.text}${e.tail === undefined ? '' : ` → ${e.tail}`}`
@@ -422,17 +462,20 @@ const evidenceLine = (e: Evidence): Line => {
   return one('proof', text, { level: 1, ...(color === undefined ? {} : { color }) })
 }
 
-/** 每条「做了」下面挂它的证据；一条证据都挂不上的标「无证据」，验收时一眼看得到 */
-const didLines = (b: Block): Line[] => {
+/**
+ * 每条「做了」下面挂它的证据。站不住的标出来，验收时一眼看得到：动作没有工具记录是「无证据」，
+ * 结果没有跑成功的命令是「未验证」，验证过、后来又改了相关文件的是「待复验」
+ */
+const didLines = (b: Block, stale: ReadonlySet<string>): Line[] => {
   // 加证据之前存下的块没有这一项，照旧画
   if (b.didEvidence === undefined) return group('did', b.did)
-  const all = b.evidence ?? []
   const isMany = b.did.length > 1
   const out: Line[] = isMany ? [one('did', '')] : []
   b.did.forEach((text, i) => {
-    const proofs = (b.didEvidence?.[i] ?? []).map(n => all[n]).filter((e): e is Evidence => e !== undefined)
-    const extra: Partial<Line> = { ...(isMany ? { level: 1 as const, bullet: true as const } : {}), ...(proofs.length === 0 ? { color: STATUS_INFO.TOREVIEW.color } : {}) }
-    out.push(one('did', proofs.length === 0 ? `${text}（无证据）` : text, extra))
+    const proofs = proofsOf(b, i)
+    const flag = !isProven(b, i) ? (isResult(b, i) ? '未验证' : '无证据') : stale.has(itemKey(b.id, i)) ? '待复验' : ''
+    const extra: Partial<Line> = { ...(isMany ? { level: 1 as const, bullet: true as const } : {}), ...(flag === '' ? {} : { color: STATUS_INFO.TOREVIEW.color }) }
+    out.push(one('did', flag === '' ? text : `${text}（${flag}）`, extra))
     out.push(...proofs.slice(0, 3).map(evidenceLine))
     if (proofs.length > 3) out.push(one('proof', `另有 ${proofs.length - 3} 条`, { level: 1 }))
   })
@@ -443,14 +486,23 @@ const didLines = (b: Block): Line[] => {
  * 「我让它做的」：每件事带上我的原话、做成了几件、证据够不够、还有几件等我，以及结论。
  * 被打断以后扫一遍这个视图，就能把「当时要干什么、做到哪了」重新装回脑子里
  */
-const askLines = (b: Block): Line[] => {
+const askLines = (b: Block, stale: ReadonlySet<string>): Line[] => {
   const lines: Line[] = []
   const said = b.ask.replace(/\s+/g, ' ').trim()
   if (said !== '' && said !== b.title) lines.push(one('ask', clip(said, 80)))
   const parts: Part[] = []
   if (b.did.length > 0) {
-    const proven = b.didEvidence?.filter(nums => nums.length > 0).length
-    parts.push({ field: 'did', text: proven === undefined ? `做了 ${b.did.length} 件` : `做了 ${b.did.length} 件 · 有证据 ${proven}` })
+    const proven = b.did.filter((_, i) => isProven(b, i)).length
+    const results = b.did.filter((_, i) => isResult(b, i)).length
+    const verified = b.did.filter((_, i) => isResult(b, i) && isProven(b, i)).length
+    const stales = b.did.filter((_, i) => stale.has(itemKey(b.id, i))).length
+    const text = [
+      `做了 ${b.did.length} 件`,
+      ...(b.didEvidence === undefined ? [] : [`有证据 ${proven}`]),
+      ...(results > 0 ? [`结果已验证 ${verified}/${results}`] : []),
+      ...(stales > 0 ? [`待复验 ${stales}`] : []),
+    ].join(' · ')
+    parts.push({ field: 'did', text })
   }
   const waiting = b.needsMe.filter((_, i) => isOpenStatus(itemStatus(b, i))).length
   if (waiting > 0) parts.push({ field: 'needsMe', text: `等我 ${waiting} 件` })
@@ -500,12 +552,12 @@ export const liveLines = (b: Block, now: number): Line[] => {
   return lines
 }
 
-/** 某块在某个视图下要显示的字段；`isOpen` 是我展开了详情。「需要我做」的条目不在这里，是单独的行 */
-export const blockLines = (b: Block, v: View, isOpen: boolean, now = 0): Line[] => {
+/** 某块在某个视图下要显示的字段；`isOpen` 是我展开了详情，`stale` 是待复验的结果（staleFacts）。「需要我做」的条目不在这里，是单独的行 */
+export const blockLines = (b: Block, v: View, isOpen: boolean, now = 0, stale: ReadonlySet<string> = NO_STALE): Line[] => {
   const lines: Line[] = b.live === undefined ? [] : liveLines(b, now)
   // 进行中的块：手动刷新出来的进展在任何视图里都直接露出来
-  if (v === 'asks' && !isOpen && b.live === undefined) return [...lines, ...askLines(b)]
-  if (v === 'done' || isOpen || b.live !== undefined) lines.push(...didLines(b))
+  if (v === 'asks' && !isOpen && b.live === undefined) return [...lines, ...askLines(b, stale)]
+  if (v === 'done' || isOpen || b.live !== undefined) lines.push(...didLines(b, stale))
   if ((v === 'done' || isOpen) && b.files.length > 0) lines.push(one('files', b.files.join('、')))
   if ((v === 'conclusions' || v === 'done' || isOpen) && b.conclusion !== '') lines.push(one('conclusion', b.conclusion))
   if (v === 'tech' && b.tech !== undefined) lines.push(...techLines(b.tech))
@@ -529,6 +581,7 @@ const partsText = (parts: readonly Part[]) => parts.map(p => (p.text === '' ? FI
 /** 把当前视图导出成 Markdown 大纲（不用图标字体，换个地方打开也看得懂） */
 export const toMarkdown = (list: readonly Block[], rows: readonly Row[], v: View, open: readonly string[], date: string) => {
   const out = [`# 会话大纲：${VIEW_INFO[v].label}`, '', `导出于 ${date}，共 ${rows.filter(r => !r.isContext && r.item === undefined).length} 块`, '']
+  const stale = staleFacts(list)
   for (const row of rows) {
     const b = row.block
     const pad = '  '.repeat(row.depth)
@@ -539,7 +592,7 @@ export const toMarkdown = (list: readonly Block[], rows: readonly Row[], v: View
     const badge = KIND_BADGE[b.kind]
     out.push(`${pad}- ${STATUS_INFO[b.status].label} ${badge === undefined ? '' : `[${badge.text}] `}${titleIn(b, v)}${row.isContext ? '（上下文）' : ''}`)
     if (row.isContext) continue
-    for (const line of blockLines(b, v, open.includes(b.id))) {
+    for (const line of blockLines(b, v, open.includes(b.id), 0, stale)) {
       const indent = line.level === 1 ? '    ' : '  '
       out.push(`${pad}${indent}- ${line.bullet === true ? (line.parts[0]?.text ?? '') : partsText(line.parts)}`)
     }
@@ -553,16 +606,23 @@ export const toMarkdown = (list: readonly Block[], rows: readonly Row[], v: View
 
 // ---------- 验收指标 ----------
 
-export const NO_METRICS: Metrics = { did: 0, proven: 0, reviewed: 0, blocked: 0, finished: 0, reopened: 0, fixed: 0 }
+export const NO_METRICS: Metrics = { did: 0, proven: 0, results: 0, verified: 0, stale: 0, reviewed: 0, blocked: 0, finished: 0, reopened: 0, fixed: 0 }
 
-/** 从块上的标记数出验收指标：证据覆盖率、验收拦下率、返工率、纠正层级 */
+/** 从块上的标记数出验收指标：动作有记录、结果有验证、待复验、验收拦下率、返工率、纠正层级 */
 export const measure = (list: readonly Block[]): Metrics => {
-  const m = { ...NO_METRICS }
+  const m = { ...NO_METRICS, stale: staleFacts(list).size }
   for (const b of list) {
     if (b.kind !== 'turn') continue
     if (b.didEvidence !== undefined) {
-      m.did += b.did.length
-      m.proven += b.didEvidence.filter(nums => nums.length > 0).length
+      b.did.forEach((_, i) => {
+        if (isResult(b, i)) {
+          m.results += 1
+          if (isProven(b, i)) m.verified += 1
+        } else {
+          m.did += 1
+          if (isProven(b, i)) m.proven += 1
+        }
+      })
     }
     if (b.reviewPassed === true || b.reviewBlocked === true) m.reviewed += 1
     if (b.reviewBlocked === true) m.blocked += 1
@@ -574,16 +634,22 @@ export const measure = (list: readonly Block[]): Metrics => {
 }
 
 export const addMetrics = (a: Metrics, b: Metrics): Metrics => ({
-  did: a.did + b.did, proven: a.proven + b.proven, reviewed: a.reviewed + b.reviewed, blocked: a.blocked + b.blocked,
+  did: a.did + b.did, proven: a.proven + b.proven, results: a.results + b.results, verified: a.verified + b.verified, stale: a.stale + b.stale,
+  reviewed: a.reviewed + b.reviewed, blocked: a.blocked + b.blocked,
   finished: a.finished + b.finished, reopened: a.reopened + b.reopened, fixed: a.fixed + b.fixed,
 })
 
 const ratio = (word: string, n: number, total: number) => (total === 0 ? `${word} —` : `${word} ${n}/${total} · ${Math.round((n * 100) / total)}%`)
 
-export const metricsLines = (m: Metrics): Line[] => [
-  { parts: [{ field: 'coverage', text: ratio('证据', m.proven, m.did) }, { field: 'review', text: ratio('拦下', m.blocked, m.reviewed) }] },
-  { parts: [{ field: 'reopen', text: ratio('重开', m.reopened, m.finished) }, { field: 'fix', text: `纠正层级 ${m.fixed} 块` }] },
-]
+export const metricsLines = (saved: Metrics): Line[] => {
+  // 旧版本算好存下的指标没有结果那几项
+  const m = { ...NO_METRICS, ...saved }
+  return [
+    { parts: [{ field: 'coverage', text: ratio('动作有记录', m.proven, m.did) }, { field: 'verified', text: ratio('结果有验证', m.verified, m.results) }] },
+    { parts: [{ field: 'review', text: ratio('拦下', m.blocked, m.reviewed) }, { field: 'reopen', text: ratio('重开', m.reopened, m.finished) }] },
+    { parts: [{ field: 'stale', text: `待复验 ${m.stale} 条` }, { field: 'fix', text: `纠正层级 ${m.fixed} 块` }] },
+  ]
+}
 
 export const sumTech = (list: readonly Block[]): Tech | undefined => {
   const all = list.map(b => b.tech).filter((t): t is Tech => t !== undefined)
@@ -700,7 +766,7 @@ export const rulerTicks = (list: readonly Block[], cursorKey: string | null, col
 /** 视图里最新的一行（最底下那条不是只当上下文的）：光标的默认位置，也就是正在做的事 */
 export const latestKey = (rows: readonly Row[]) => rows.filter(r => !r.isContext).at(-1)?.key
 
-export const toTreeRows = (rows: readonly Row[], v: View, open: readonly string[], cursor: string | null, now = 0, selected: readonly string[] = []): TreeRow[] =>
+export const toTreeRows = (rows: readonly Row[], v: View, open: readonly string[], cursor: string | null, now = 0, selected: readonly string[] = [], stale: ReadonlySet<string> = NO_STALE): TreeRow[] =>
   rows.map(row => {
     const b = row.block
     const st = row.item?.status ?? b.status
@@ -725,7 +791,7 @@ export const toTreeRows = (rows: readonly Row[], v: View, open: readonly string[
     }
     if (row.more !== undefined) return { ...common, arrow: '▸', status: '…', isOpen: false, isClosed: true, title: moreTitle(row.more.length), isContext: false, lines: [] }
     const badge = KIND_BADGE[b.kind]
-    const lines = row.isContext ? [] : blockLines(b, v, open.includes(b.id), now)
+    const lines = row.isContext ? [] : blockLines(b, v, open.includes(b.id), now, stale)
     return {
       ...common,
       arrow: row.hasChildren ? (row.isFolded ? '▸' : '▾') : '•',

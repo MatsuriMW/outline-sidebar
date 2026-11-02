@@ -496,9 +496,67 @@ test('「做了」挂证据；ToReview 先看证据才能改成 Done；⇧S 在�
 
   // 指标：3 条「做了」2 条有证据；验收 1 块、没拦下；Done 之后重开了 1 块
   await ui.press({ key: 'view-tech' })
-  expect(await has(/证据 2\/3 · 67%/)).toBe(true)
+  expect(await has(/动作有记录 2\/3 · 67%/)).toBe(true)
   expect(await has(/拦下 0\/1 · 0%/)).toBe(true)
   expect(await has(/重开 1\/1 · 100%/)).toBe(true)
+  await ui.unmount()
+})
+
+test('结果要有跑成功的命令验证；验证后又改了相关文件就待复验；指标分动作和结果', async ($, on) => {
+  const first = {
+    title: '修登录', status: 'TOREVIEW', conclusion: '', questions: [], needsMe: [], parent: null, resolved: [],
+    did: [
+      { text: '改了 login.ts', result: false, evidence: [1] },
+      { text: '测试通过', result: true, evidence: [2] },
+      // 结果只挂了改文件，证明不了
+      { text: '登录页能打开', result: true, evidence: [1] },
+    ],
+  }
+  const second = { title: '调登录样式', status: 'DONE', did: [{ text: '改了样式', result: false, evidence: [1] }], conclusion: '', questions: [], needsMe: [], parent: null, resolved: [] }
+  const clock = engine(on, [], {}, [first, second])
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  const turn = async (turnId: string, text: string, steps: () => Promise<void>) => {
+    await $.turn.start({ text, turnId })
+    await steps()
+    await $.turn.complete({ answer: '好了', durationMs: 1000, isAborted: false, turnId, reason: 'answer', usage: { ...USAGE, model: 'claude-opus-5-5' } })
+    await clock.settle()
+  }
+  await turn('t1', '修登录', async () => {
+    await $.tool.call({ tool: 'Edit', file_path: '/x/login.ts', old_string: 'a', new_string: 'b' } as never)
+    await $.tool.call({ tool: 'Bash', command: 'npm test' } as never)
+  })
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'vscode' })
+  const has = async (text: RegExp) => (await ui.find({ type: 'Text', text })) !== undefined
+  await ui.press({ key: 'view-done' })
+  expect(await has(/登录页能打开（未验证）/)).toBe(true)
+  expect(await has(/测试通过（/)).toBe(false)
+  await ui.press({ key: 'view-asks' })
+  expect(await has(/做了 3 件 · 有证据 2 · 结果已验证 1\/2$/)).toBe(true)
+
+  // 第二轮又改了 login.ts：第一轮验证过的「测试通过」不能再信
+  await turn('t2', '调登录样式', async () => {
+    await $.tool.call({ tool: 'Edit', file_path: '/x/login.ts', old_string: 'b', new_string: 'c' } as never)
+  })
+  await ui.press({ key: 'view-done' })
+  expect(await has(/测试通过（待复验）/)).toBe(true)
+  await ui.press({ key: 'view-asks' })
+  expect(await has(/结果已验证 1\/2 · 待复验 1/)).toBe(true)
+  await ui.press({ key: 'view-tech' })
+  expect(await has(/动作有记录 2\/2 · 100%/)).toBe(true)
+  expect(await has(/结果有验证 1\/2 · 50%/)).toBe(true)
+  expect(await has(/待复验 1 条/)).toBe(true)
+
+  // 验收第一块（光标一直停在 b1 上）：第一下展开证据，第二下通过；告诉 Claude 哪条结果没验证、哪条要复验
+  await ui.press({ key: 'view-all' })
+  await act(ui, 'status')
+  await act(ui, 'status')
+  await $.prompt.submit({ text: '继续' } as never)
+  const said = contexts.at(-1)?.join('') ?? ''
+  expect(said).toContain('TOREVIEW → DONE')
+  expect(said).toContain('这几条结果没有命令验证过：登录页能打开')
+  expect(said).toContain('这几条结果验证后又改了相关文件，要复验：测试通过')
+  expect(said).not.toContain('没有工具调用能证明')
   await ui.unmount()
 })
 

@@ -43,6 +43,11 @@ export type Block = {
   evidence?: Evidence[]
   /** did 每一条挂的证据（下标对 evidence）；模型只能从 evidence 里挑，挑不出就是空的 */
   didEvidence?: number[][]
+  /**
+   * did 每一条是不是「结果」（下标对 did）：结果是说某件事现在成立（测试通过、能打开、已上线），要挂一条跑成功的命令才算验证过；
+   * 不是结果的就是动作（改了、加了、建了什么），挂上工具记录就算有证据。加这个字段之前总结的块没有，全当动作
+   */
+  didResult?: boolean[]
   /** 看过证据的时间：ToReview 要先看过证据才能改成 Done */
   reviewedAt?: number
   /** 验收时被我放行过（ToReview → Done） */
@@ -99,9 +104,13 @@ export type Evidence = { kind: 'edit' | 'run'; text: string; isOk: boolean; tail
 
 /** 验收和返工的指标，从块上的标记数出来；跨会话就是把各个会话的存档加起来 */
 export type Metrics = {
-  /** 挂过证据的「做了」一共几条，其中几条有证据 */
+  /** 挂过证据的「做了」里，动作一共几条，其中几条有工具记录 */
   did: number
   proven: number
+  /** 结果一共几条，其中几条有跑成功的命令验证；验证过、后来又改了相关文件的几条（待复验） */
+  results: number
+  verified: number
+  stale: number
   /** 我验收过几块，其中拦下几块 */
   reviewed: number
   blocked: number
