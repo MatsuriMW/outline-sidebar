@@ -149,7 +149,7 @@ A typical round trip:
 | `5` | All | The whole outline |
 | `6` | Technical info | Usage, cache hit rate, duration, model, skills, MCP, subagents; review metrics at the bottom |
 
-The order of the number keys can be changed in the `views` field of `/config`.
+The order of the number keys can be changed in the `views` field of `/config`. The view bar shows at most 5 entries: with more than 5 views it shows the first 4 and tucks the rest into "…"; click it to show them all, and it closes again once you pick one. When the view you are on is tucked away, its name shows on "…". Number keys still reach every view, so put the ones you use most in the first 4.
 
 ### Replying and reviewing
 
@@ -196,6 +196,8 @@ Multi-select is terminal-only for now. Esc belongs to Claude Code and never reac
 - It only applies in the three views that track current progress: *What I need to do*, *What I asked it to do* and *All*. *Questions and conclusions*, *What it has done* and *Technical info* are about finished work anyway and never fold; exports are not affected.
 
 **Folding into "…"**: in the upper part of the outline, a run of 3 or more consecutive top-level blocks whose whole subtrees are settled folds into one line, "▸ … N settled blocks (→ to expand)". The newest block always stays visible, and the block under the cursor or one you opened by hand breaks the run. With the cursor on that line, press `→`, Space, or *Details* in the ⏎ menu, or click it, to expand it; the cursor lands on the first block of the run, and an expanded run stays expanded for the rest of the session. It follows the same views as auto-fold above, does not apply while searching or zoomed, and `O` on "expand all" expands it too.
+
+**At most 5 per level**: a person can keep track of about 5 chunks at once, so when one level (top-level topics, or the child blocks and *What I need to do* items under a block) has more than 5, only the newest 4 stay and the earlier ones fold into one line, "▸ … N more (→ to expand)"; if some of them are waiting on you, it reads "N more, k waiting on you". The block under the cursor and the one still running always stay. Expand it the same way as above; a level you expanded stays fully shown for the rest of the session. The "done" list under a block works the same way: past 5, it shows the first 4 and "N more"; open the details to see them all. To see everything at once, switch `O` to "expand all" or search: neither folds. Export is not affected.
 
 **The ruler**: the row of small bars below the divider and above the outline has one bar per turn of the whole session, oldest on the left. Its color follows that turn's status; its height says whether you are needed: settled turns are lowest, open ones a bit taller, ones waiting on you taller still, and the turn under the cursor is full height. However long the outline gets, you can see at a glance how long the session is, where the items waiting on you pile up and where you are now. Click a bar and the cursor jumps to that turn; if the current view hides it (view filter, search, zoom, folding, "hide Done"), those are cleared, and if it is still hidden the view switches to *All*. When there are more turns than the pane is wide, several turns share one bar, represented by the most urgent of them. In the desktop app, the bar under the pointer and its neighbors swell like the Dock, and the line below shows that turn's title; the terminal draws a single row that does not follow the pointer.
 

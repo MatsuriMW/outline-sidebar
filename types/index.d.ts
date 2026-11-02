@@ -159,6 +159,8 @@ declare module 'claude-code' {
       shownRuns: string[]
       /** F 一键收起已完成：整棵了结的顶层块全折进「…」 */
       doneFolded: boolean
+      /** 视图栏的「…」打开了：视图多于 5 个时全部摆出来 */
+      viewsOpen: boolean
       /** 光标刚离开的块（连同祖先）先别自动折，到这个时间为止 */
       lingering: Record<string, number>
       /** 滚轮在面板上滚过的格数，累加；交给大纲树自己翻 */

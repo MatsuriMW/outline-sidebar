@@ -49,6 +49,8 @@ import {
   isProven,
   isResult,
   itemKey,
+  MAX_SHOWN,
+  moreLabel,
   sumTech,
   techLines,
   type AutoFold,
@@ -76,6 +78,8 @@ const blocks = atom({ plugin: 'outline-sidebar', key: 'blocks' } as const, [])
 const folded = atom({ plugin: 'outline-sidebar', key: 'folded' } as const, [])
 const unfolded = atom({ plugin: 'outline-sidebar', key: 'unfolded' } as const, [])
 const shownRuns = atom({ plugin: 'outline-sidebar', key: 'shownRuns' } as const, [])
+/** 视图栏的「…」打开了：视图多于 MAX_SHOWN 个时，全部摆出来 */
+const viewsOpen = atom({ plugin: 'outline-sidebar', key: 'viewsOpen' } as const, false)
 const doneFolded = atom({ plugin: 'outline-sidebar', key: 'doneFolded' } as const, false)
 const lingering = atom({ plugin: 'outline-sidebar', key: 'lingering' } as const, {})
 const wheel = atom({ plugin: 'outline-sidebar', key: 'wheel' } as const, 0)
@@ -569,7 +573,9 @@ async function autoFold($: EngineInterface): Promise<AutoFold> {
   const hold = Object.entries(await read($, lingering)).filter(([, until]) => until > now).map(([id]) => id)
   const at = key === null ? undefined : all.find(b => b.id === parseKey(key).blockId)
   if (at !== undefined) hold.push(at.id, ...ancestorsOf(all, at).map(b => b.id))
-  return { unfolded: await read($, unfolded), hold, shownRuns: await read($, shownRuns), isDoneFolded: await read($, doneFolded) }
+  // 光标所在那一行本身（「需要我做」的一条、「…」）也别折走
+  if (key !== null) hold.push(key)
+  return { unfolded: await read($, unfolded), hold, shownRuns: await read($, shownRuns), isDoneFolded: await read($, doneFolded), isDetailed: (await read($, level)) === 'all' }
 }
 
 /** 挪光标：刚离开的那一块和它的祖先先缓冲一会儿，到点再重画，该折的才折起来 */
@@ -630,6 +636,8 @@ async function switchView($: EngineInterface, v: View) {
   const at = await read($, cursor)
   const isAtLatest = at === null || at === latestKey(await currentRows($))
   await update($, view, () => v)
+  // 从视图栏的「…」里挑了一个，就收起来
+  await update($, viewsOpen, () => false)
   await clearSelection($)
   if (isAtLatest) await setCursor($, latestKey(await currentRows($)) ?? null)
   else await keepCursorInView($)
@@ -1900,6 +1908,10 @@ export const register: Register = (on, options) => {
     const staleText = `${staleIds.length} 块隔了 ${STALE_TURNS} 轮以上还开着，没人动过`
     // 验证过、后来又改了相关文件的结果
     const staleDid = staleFacts(list)
+    // 视图多于 MAX_SHOWN 个：视图栏只摆前几个，其余收进「…」（连它一共 MAX_SHOWN 个），数字键照样切得到
+    const isViewsOpen = await read($, viewsOpen)
+    const shownViews = keys.length > MAX_SHOWN && !isViewsOpen ? keys.slice(0, MAX_SHOWN - 1) : keys
+    const hiddenViews = keys.filter(one => !shownViews.includes(one))
     const now = await $.clock.now()
     const width = e.props.bodyColumns
     // 终端用图标字体；桌面（以及别的能画 SVG 的界面）用 SVG
@@ -1960,11 +1972,11 @@ export const register: Register = (on, options) => {
         )}
         {/* 视图栏留成按钮：侧栏有键盘时数字键才切得了视图。按钮在指针下一定反色，里面的字只用一种样式，反出来才是一整块 */}
         <Box flexWrap="wrap" columnGap={1} rowGap={isTerm ? 0 : 'xs'}>
-          {keys.map((one, i) => (
+          {shownViews.map(one => (
             <Button
               key={`view-${one}`}
               {...(isTerm ? { plain: true as const } : { variant: v === one ? ('primary' as const) : ('secondary' as const) })}
-              hotkey={String(i + 1)}
+              hotkey={String(keys.indexOf(one) + 1)}
               dimColor={isTerm && v !== one}
               {...(v === one ? { autoFocus: true as const } : {})}
               onPress={() => (v === one && e.surface === 'terminal' ? undefined : switchView($, one))}
@@ -1978,7 +1990,28 @@ export const register: Register = (on, options) => {
               )}
             </Button>
           ))}
+          {keys.length > MAX_SHOWN && (
+            <Button
+              key="view-more"
+              {...(isTerm ? { plain: true as const } : { variant: hiddenViews.includes(v) ? ('primary' as const) : ('secondary' as const) })}
+              dimColor={isTerm && !hiddenViews.includes(v)}
+              onPress={() => update($, viewsOpen, open => !open)}
+            >
+              {/* 正看着的视图收在里面，就把它的名字露在「…」上 */}
+              {isViewsOpen ? '收起' : hiddenViews.includes(v) ? <Text bold underline={isTabs}>{`… ${viewLabel(v, waiting)}`}</Text> : `… 还有 ${hiddenViews.length} 个`}
+            </Button>
+          )}
         </Box>
+        {/* 收进「…」的视图，按钮照样画出来但藏着：树没有键盘的时候，数字键也有按钮接住，不会掉回对话框 */}
+        {hiddenViews.length > 0 && (
+          <Box display="none">
+            {hiddenViews.map(one => (
+              <Button key={`view-${one}`} plain hotkey={String(keys.indexOf(one) + 1)} onPress={() => switchView($, one)}>
+                {viewLabel(one, waiting)}
+              </Button>
+            ))}
+          </Box>
+        )}
         <Box flexWrap="wrap" columnGap={1} rowGap={isTerm ? 0 : 'xs'} alignItems="center">
           {ACTIONS.filter(a => isTerm || Select === undefined || DESK_ACTIONS.includes(a.key)).map(a => (
             <Button key={a.key} plain hotkey={a.hotkey} onPress={() => runAction($, a.key)}>
@@ -2085,7 +2118,7 @@ export const register: Register = (on, options) => {
 
     // 终端里用树视图接 Logseq 式按键（中文输入法下也能用）；别的界面退回成按钮
     if (e.surface === 'terminal') {
-      const viewLabels = keys.map((one, i) => `${i + 1}: ${viewLabel(one, waiting)}`)
+      const viewLabels = [...shownViews.map(one => `${keys.indexOf(one) + 1}: ${viewLabel(one, waiting)}`), ...(keys.length > MAX_SHOWN ? [`… 还有 ${hiddenViews.length} 个`] : [])]
       const actionLabels = ACTIONS.map(a => `${a.hotkey}: ${actionLabel(a, zoomId !== null, isDoneFolded, canUndoLayout)}`)
       const headerRows =
         (title === null ? 0 : textRows(title, width)) +
@@ -2149,7 +2182,7 @@ export const register: Register = (on, options) => {
                     ▸
                   </Button>
                 </Box>
-                <Text dimColor>… 已了结 {String(row.more.length)} 块</Text>
+                <Text dimColor>… {moreLabel(row)}</Text>
                 <Button key={`more-${row.key}`} plain onPress={() => pick($, row.key)}>
                   展开
                 </Button>

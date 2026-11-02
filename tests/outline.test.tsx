@@ -1,7 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
-import { clampParent, jumpTarget, relayout, rulerTicks, wrapCells } from '../hooks/outline'
+import { clampParent, jumpTarget, relayout, rulerTicks, visibleRows, wrapCells } from '../hooks/outline'
 
 const PANE = {
   plugin: 'outline-sidebar',
@@ -65,6 +65,13 @@ const engine = (on: On, copied: string[], stored: Record<string, unknown> = {}, 
   return clock
 }
 
+/** 切视图：收进视图栏「…」的（默认是「全部」「技术信息」）在终端里没画出来，先点「…」再点它 */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const pickView = async (ui: any, v: string) => {
+  if ((await ui.find({ type: 'Button', key: `view-${v}` })) === undefined) await ui.press({ key: 'view-more' })
+  await ui.press({ key: `view-${v}` })
+}
+
 /** 工具栏上的操作：终端里是按钮；桌面这类图形界面只摆几个常用的，其余在「更多操作」下拉框里 */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const act = async (ui: any, key: string) =>
@@ -115,7 +122,7 @@ test('三轮对话：视图、子任务、技术信息、待办消解、导出�
   const ui = await $.ui.mount({ ...PANE, surface: 'vscode' })
   const has = async (text: RegExp) => (await ui.find({ type: 'Text', text })) !== undefined
 
-  await ui.press({ key: 'view-all' })
+  await pickView(ui, 'all')
   expect(await has(/给随机漫步加时间筛选/)).toBe(true)
   // 光标默认停在最新一行 b2 上，b2 不折；挪到 b1、过了自动折叠的延迟，整棵都做完的 b2 折起来，子任务看不到；光标回到 b2 上就不折
   expect(await has(/查 Hexo 文档/)).toBe(true)
@@ -128,28 +135,28 @@ test('三轮对话：视图、子任务、技术信息、待办消解、导出�
   expect(await has(/^Done$/)).toBe(true)
 
   // 我让它做的：每件事带上我的原话、做了几件、结论
-  await ui.press({ key: 'view-asks' })
+  await pickView(ui, 'asks')
   expect(await has(/每日回顾的随机漫步加个时间筛选/)).toBe(true)
   expect(await has(/做了 1 件/)).toBe(true)
   expect(await has(/默认全部/)).toBe(true)
 
   // 需要我做的：第 4 档那一条单独一行，第 3 轮解决了，是 Done
-  await ui.press({ key: 'view-me' })
+  await pickView(ui, 'me')
   expect(await has(/^确认第 4 档是什么$/)).toBe(true)
   expect(await has(/修 Hexo 部署/)).toBe(false)
 
   // 我让它做的：不含子任务
-  await ui.press({ key: 'view-asks' })
+  await pickView(ui, 'asks')
   expect(await has(/修 Hexo 部署/)).toBe(true)
   expect(await has(/查 Hexo 文档/)).toBe(false)
 
   // 它已做的：子任务的结论也在
-  await ui.press({ key: 'view-done' })
+  await pickView(ui, 'done')
   expect(await has(/改了 _config.yml/)).toBe(true)
   expect(await has(/下划线开头/)).toBe(true)
 
   // 技术信息：一行里几段「图标 字」，不记内置工具
-  await ui.press({ key: 'view-tech' })
+  await pickView(ui, 'tech')
   expect(await has(/^90%$/)).toBe(true)
   expect(await has(/^opus-5-5$/)).toBe(true)
   expect(await has(/^obsidian-cli$/)).toBe(true)
@@ -163,12 +170,12 @@ test('三轮对话：视图、子任务、技术信息、待办消解、导出�
   await act(ui, 'export')
   expect(copied.at(-1)).toContain('# 会话大纲：技术信息')
   expect(copied.at(-1)).toContain('缓存命中率 90%')
-  await ui.press({ key: 'view-me' })
+  await pickView(ui, 'me')
   await act(ui, 'export')
   expect(copied.at(-1)).toContain('Done 确认第 4 档是什么')
 
   // 缩进、折叠
-  await ui.press({ key: 'view-all' })
+  await pickView(ui, 'all')
   await ui.press({ key: 'block-b2' })
   await act(ui, 'indent')
   // 光标在子块 b2 上，T 折到母块 b1，光标跟到 b1；b1 是顶层，再按就是开合它自己
@@ -184,7 +191,7 @@ test('「需要我做」的每一条能单独改状态', async ($, on) => {
   await play($, clock)
   const ui = await $.ui.mount({ ...PANE, surface: 'vscode' })
   const has = async (text: RegExp) => (await ui.find({ type: 'Text', text })) !== undefined
-  await ui.press({ key: 'view-me' })
+  await pickView(ui, 'me')
   expect(await has(/^Done$/)).toBe(true)
   // 点只挪光标，点几下状态都不变
   await ui.press({ key: 'block-b1#0' })
@@ -196,7 +203,7 @@ test('「需要我做」的每一条能单独改状态', async ($, on) => {
   // 角标跟着这一条走（并在视图名后面，按钮里的字只用一种样式）
   expect(await has(/^需要我做的 1$/)).toBe(true)
   // 块本身的状态没动
-  await ui.press({ key: 'view-all' })
+  await pickView(ui, 'all')
   expect(await has(/^Done$/)).toBe(true)
   await ui.unmount()
 })
@@ -205,7 +212,7 @@ test('侧栏里改的状态，下一条消息带给 Claude', async ($, on) => {
   const clock = engine(on, [])
   await play($, clock)
   const ui = await $.ui.mount({ ...PANE, surface: 'vscode' })
-  await ui.press({ key: 'view-me' })
+  await pickView(ui, 'me')
   // Done → Todo → Doing → Done：改回原样不用说
   await ui.press({ key: 'block-b1#0' })
   for (let i = 0; i < 3; i++) await act(ui, 'status')
@@ -241,7 +248,7 @@ test('--resume 后从存档恢复大纲（旧状态词换成新的）', async ($
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
 
   const ui = await $.ui.mount({ ...PANE, surface: 'vscode' })
-  await ui.press({ key: 'view-all' })
+  await pickView(ui, 'all')
   expect(await ui.find({ type: 'Text', text: /上次聊的旧话题/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /^Cancelled$/ })).toBeDefined()
   await ui.unmount()
@@ -253,7 +260,7 @@ test('终端里的树：Logseq 式按键，⌘/ 切状态', async ($, on) => {
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   const has = async (text: RegExp) => (await ui.find({ type: 'Text', text, in: 'tree' })) !== undefined
 
-  await ui.press({ key: 'view-all' })
+  await pickView(ui, 'all')
   expect(await has(/给随机漫步加时间筛选/)).toBe(true)
   // 不再有 Org 式的 [x] 记号
   expect(await has(/\[x\]|\[ \]/)).toBe(false)
@@ -377,7 +384,7 @@ test('回顾：接住 Claude Code 自带的 recap，也能按 r 生成大纲回�
   expect(await has(/第 4 档定为 3 个月/)).toBe(true)
 
   // 回顾也进了大纲，问题与结论视图里能看到
-  await ui.press({ key: 'view-conclusions' })
+  await pickView(ui, 'conclusions')
   expect(await has(/\[回顾\]/)).toBe(true)
   await ui.unmount()
 })
@@ -389,7 +396,7 @@ test('进行中的一轮：实时显示跑了多久、改了几个文件，按 p
 
   const ui = await $.ui.mount({ ...PANE, surface: 'vscode' })
   const has = async (text: RegExp) => (await ui.find({ type: 'Text', text })) !== undefined
-  await ui.press({ key: 'view-all' })
+  await pickView(ui, 'all')
   expect(await has(/博客部署挂了，帮我看看/)).toBe(true)
   expect(await has(/^Doing$/)).toBe(true)
 
@@ -416,7 +423,7 @@ test('中文输入法下也能用：回车弹菜单改状态，空格展开详�
   await play($, clock)
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   const has = async (text: RegExp) => (await ui.find({ type: 'Text', text, in: 'tree' })) !== undefined
-  await ui.press({ key: 'view-all' })
+  await pickView(ui, 'all')
 
   // ↓ 进入视图，选中第一块，空格展开详情
   await ui.key({ key: 'down', in: 'tree' })
@@ -467,7 +474,7 @@ test('「做了」挂证据；ToReview 先看证据才能改成 Done；⇧S 在�
 
   const ui = await $.ui.mount({ ...PANE, surface: 'vscode' })
   const has = async (text: RegExp) => (await ui.find({ type: 'Text', text })) !== undefined
-  await ui.press({ key: 'view-done' })
+  await pickView(ui, 'done')
   expect(await has(/改 outline\.ts/)).toBe(true)
   expect(await has(/✓ claude plugin test \. → 13 pass/)).toBe(true)
   expect(await has(/顺手优化了性能（无证据）/)).toBe(true)
@@ -475,7 +482,7 @@ test('「做了」挂证据；ToReview 先看证据才能改成 Done；⇧S 在�
   expect(await has(/npm run fail/)).toBe(false)
 
   // 验收关口：光标已经在 b1 上、详情没展开。第一下只展开证据，第二下才改成 Done
-  await ui.press({ key: 'view-all' })
+  await pickView(ui, 'all')
   expect(await has(/跑通了测试/)).toBe(false)
   await act(ui, 'status')
   expect(await has(/^ToReview$/)).toBe(true)
@@ -495,7 +502,7 @@ test('「做了」挂证据；ToReview 先看证据才能改成 Done；⇧S 在�
   expect(await has(/^Failed$/)).toBe(true)
 
   // 指标：3 条「做了」2 条有证据；验收 1 块、没拦下；Done 之后重开了 1 块
-  await ui.press({ key: 'view-tech' })
+  await pickView(ui, 'tech')
   expect(await has(/动作有记录 2\/3 · 67%/)).toBe(true)
   expect(await has(/拦下 0\/1 · 0%/)).toBe(true)
   expect(await has(/重开 1\/1 · 100%/)).toBe(true)
@@ -528,27 +535,27 @@ test('结果要有跑成功的命令验证；验证后又改了相关文件就�
 
   const ui = await $.ui.mount({ ...PANE, surface: 'vscode' })
   const has = async (text: RegExp) => (await ui.find({ type: 'Text', text })) !== undefined
-  await ui.press({ key: 'view-done' })
+  await pickView(ui, 'done')
   expect(await has(/登录页能打开（未验证）/)).toBe(true)
   expect(await has(/测试通过（/)).toBe(false)
-  await ui.press({ key: 'view-asks' })
+  await pickView(ui, 'asks')
   expect(await has(/做了 3 件 · 有证据 2 · 结果已验证 1\/2$/)).toBe(true)
 
   // 第二轮又改了 login.ts：第一轮验证过的「测试通过」不能再信
   await turn('t2', '调登录样式', async () => {
     await $.tool.call({ tool: 'Edit', file_path: '/x/login.ts', old_string: 'b', new_string: 'c' } as never)
   })
-  await ui.press({ key: 'view-done' })
+  await pickView(ui, 'done')
   expect(await has(/测试通过（待复验）/)).toBe(true)
-  await ui.press({ key: 'view-asks' })
+  await pickView(ui, 'asks')
   expect(await has(/结果已验证 1\/2 · 待复验 1/)).toBe(true)
-  await ui.press({ key: 'view-tech' })
+  await pickView(ui, 'tech')
   expect(await has(/动作有记录 2\/2 · 100%/)).toBe(true)
   expect(await has(/结果有验证 1\/2 · 50%/)).toBe(true)
   expect(await has(/待复验 1 条/)).toBe(true)
 
   // 验收第一块（光标一直停在 b1 上）：第一下展开证据，第二下通过；告诉 Claude 哪条结果没验证、哪条要复验
-  await ui.press({ key: 'view-all' })
+  await pickView(ui, 'all')
   await act(ui, 'status')
   await act(ui, 'status')
   await $.prompt.submit({ text: '继续' } as never)
@@ -564,7 +571,7 @@ test('验收没通过：停手 4 秒后交给 Claude，按最终状态说清返�
   const clock = await reviewTurn($, on)
   const ui = await $.ui.mount({ ...PANE, surface: 'vscode' })
   const has = async (text: RegExp) => (await ui.find({ type: 'Text', text })) !== undefined
-  await ui.press({ key: 'view-all' })
+  await pickView(ui, 'all')
   const sent = prompts.length
 
   // ToReview → Rework → Unclear?：连按的时候不发，停手 4 秒后按最终的 Unclear? 发一条
@@ -599,7 +606,7 @@ test('一次打回好几件：消息里让 Claude 把互不相干的交给子代
     await clock.settle()
   }
   const ui = await $.ui.mount({ ...PANE, surface: 'vscode' })
-  await ui.press({ key: 'view-all' })
+  await pickView(ui, 'all')
   const sent = prompts.length
 
   // 两块都打回成 Rework → Unclear? → Failed
@@ -634,7 +641,7 @@ test('Errored、Hit Limit! 由 mod 标：一轮因 API 出错结束就是 Errore
   }
   const ui = await $.ui.mount({ ...PANE, surface: 'vscode' })
   const has = async (text: RegExp) => (await ui.find({ type: 'Text', text })) !== undefined
-  await ui.press({ key: 'view-all' })
+  await pickView(ui, 'all')
   expect(await has(/^Errored$/)).toBe(true)
   expect(await has(/^Hit Limit!$/)).toBe(true)
   expect(await has(/^Done$/)).toBe(false)
@@ -668,7 +675,7 @@ test('「需要我做」的事用 Y / N / D 回复：Yes、No 停手 4 秒后作
   await play($, clock)
   const ui = await $.ui.mount({ ...PANE, surface: 'vscode' })
   const has = async (text: RegExp) => (await ui.find({ type: 'Text', text })) !== undefined
-  await ui.press({ key: 'view-me' })
+  await pickView(ui, 'me')
   await ui.press({ key: 'block-b1#0' })
   const sent = prompts.length
 
@@ -703,7 +710,7 @@ test('引导线不断：标题和字段折成几行时，每一行左边都接�
     await clock.settle()
   }
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  await ui.press({ key: 'view-conclusions' })
+  await pickView(ui, 'conclusions')
   // 母块有子块，它的标题续行、结论的每一行前面都是「│」加空格；结论折成好几行，竖线就有好几段
   const guides = await ui.findAll({ type: 'Text', text: /^│ +$/, in: 'tree' })
   expect(guides.length).toBeGreaterThanOrEqual(4)
@@ -721,7 +728,7 @@ test('层级「去掉 Done」：Done 的块藏起来，下面还有没做完的�
   }
   const ui = await $.ui.mount({ ...PANE, surface: 'vscode' })
   const has = async (text: RegExp) => (await ui.find({ type: 'Text', text })) !== undefined
-  await ui.press({ key: 'view-all' })
+  await pickView(ui, 'all')
   expect(await has(/做完的另一块/)).toBe(true)
   // 默认是「全部标题」，O 两下：全部展开 → 去掉 Done
   await act(ui, 'level')
@@ -745,7 +752,7 @@ test('层级「去掉 Done」也藏起「需要我做」里答过 Yes / No、做
   await clock.settle()
   const ui = await $.ui.mount({ ...PANE, surface: 'vscode' })
   const has = async (text: RegExp) => (await ui.find({ type: 'Text', text })) !== undefined
-  await ui.press({ key: 'view-me' })
+  await pickView(ui, 'me')
   await ui.press({ key: 'block-b1#0' })
   await ui.press({ key: 'yes' })
   await act(ui, 'level')
@@ -759,7 +766,7 @@ test('待验收的块上按 Y 就是验收通过：同样要先看证据，算�
   const clock = await reviewTurn($, on)
   const ui = await $.ui.mount({ ...PANE, surface: 'vscode' })
   const has = async (text: RegExp) => (await ui.find({ type: 'Text', text })) !== undefined
-  await ui.press({ key: 'view-all' })
+  await pickView(ui, 'all')
   const sent = prompts.length
   // 第一下只展开证据，第二下才通过，变成 Done 而不是 Yes
   await ui.press({ key: 'yes' })
@@ -769,7 +776,7 @@ test('待验收的块上按 Y 就是验收通过：同样要先看证据，算�
   expect(await has(/^Yes$/)).toBe(false)
   await clock.advance(5000)
   expect(prompts.length).toBe(sent)
-  await ui.press({ key: 'view-tech' })
+  await pickView(ui, 'tech')
   expect(await has(/拦下 0\/1 · 0%/)).toBe(true)
   await ui.unmount()
 })
@@ -782,7 +789,7 @@ test('「需要我做」里交给我做的事答 Yes 不单独发；问我的问
   await $.turn.complete({ answer: '好了', durationMs: 1000, isAborted: false, turnId: 't1', reason: 'answer', usage: { ...USAGE, model: 'claude-opus-5-5' } })
   await clock.settle()
   const ui = await $.ui.mount({ ...PANE, surface: 'vscode' })
-  await ui.press({ key: 'view-me' })
+  await pickView(ui, 'me')
   const sent = prompts.length
 
   // 交给我做的事：答 Yes 只记下，等下一条消息
@@ -814,7 +821,7 @@ test('自动折叠：整棵都了结的块，光标离开 3 秒后折起来；�
   }
   const ui = await $.ui.mount({ ...PANE, surface: 'vscode' })
   const has = async (text: RegExp) => (await ui.find({ type: 'Text', text })) !== undefined
-  await ui.press({ key: 'view-all' })
+  await pickView(ui, 'all')
 
   // 把最后一个没做完的子块标成 Done：光标还在它上面，先不折
   await ui.press({ key: 'block-b2' })
@@ -829,11 +836,11 @@ test('自动折叠：整棵都了结的块，光标离开 3 秒后折起来；�
   expect(await has(/^母块$/)).toBe(true)
 
   // 结论视图不自动折：做完的事本来就是要看的
-  await ui.press({ key: 'view-conclusions' })
+  await pickView(ui, 'conclusions')
   expect(await has(/^子块$/)).toBe(true)
 
   // 手动打开过的，光标走开也不再自动折
-  await ui.press({ key: 'view-all' })
+  await pickView(ui, 'all')
   await ui.press({ key: 'block-b1' })
   await act(ui, 'unfold-down')
   expect(await has(/^子块$/)).toBe(true)
@@ -854,8 +861,11 @@ test('窗口按行截、滚轮按行翻：底下不空一截，↑ ↓ 数的是
   }
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: { ...PANE.props, scroll: { offset: 0, bodyRows: 18 } } })
   const text = async (pattern: RegExp) => (await ui.find({ type: 'Text', text: pattern, in: 'tree' }))?.text
-  await ui.press({ key: 'view-all' })
-  await startAtFirst(ui, clock)
+  await pickView(ui, 'all')
+  // 12 块超过 5 个，前面的折在「…」里：先展开，才有整整 12 块可滚
+  await ui.post({ type: 'click', id: 'more:b1' }, { in: 'tree' })
+  // 展开后光标落在第一块上；等离开的那块过了自动折叠的延迟
+  await clock.advance(3000)
   // 光标在第 1 件事上，窗口从头开始；底下还有几行，数的是行不是块
   expect(await text(/↑/)).toBeUndefined()
   const below = Number((await text(/↓ \d+ 行/))?.match(/\d+/)?.[0])
@@ -895,7 +905,7 @@ test('切视图：光标停在最新一行，切过去也落在那个视图的�
   }
 
   // 一打开：光标默认在最新一行，放到窗口中间，下面空着，没有「↓ 还有几行」
-  await ui.press({ key: 'view-all' })
+  await pickView(ui, 'all')
   await ui.key({ key: 'return', in: 'tree' })
   expect(await at()).toBe('第 12 件事')
   expect(await text(/↓/)).toBeUndefined()
@@ -907,15 +917,15 @@ test('切视图：光标停在最新一行，切过去也落在那个视图的�
 
   // 光标回到最新一行再切视图：落在那个视图的最新一行，又放到中间
   await ui.key({ key: 'down', in: 'tree' })
-  await ui.press({ key: 'view-asks' })
+  await pickView(ui, 'asks')
   expect(await at()).toBe('第 12 件事')
   expect(await text(/↓/)).toBeUndefined()
 
   // 自己把光标挪到第 3 件事：切走再切回来，光标还在第 3 件事
   await ui.post({ type: 'click', id: 'b3' }, { in: 'tree' })
-  await ui.press({ key: 'view-all' })
+  await pickView(ui, 'all')
   expect(await at()).toBe('第 3 件事')
-  await ui.press({ key: 'view-asks' })
+  await pickView(ui, 'asks')
   expect(await at()).toBe('第 3 件事')
   await ui.unmount()
 })
@@ -935,7 +945,7 @@ test('「需要我做」的事按条自动了结：我说的直接 Done，Claude
   }
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   const row = async (text: string) => (await ui.findAll({ type: 'Text', in: 'tree' })).map(f => (f as { text?: string }).text ?? '').join('|')
-  await ui.press({ key: 'view-me' })
+  await pickView(ui, 'me')
   const shown = await row('')
   // 按条：一件 Done、一件 ToReview、一件还是 Todo；块还在等我，不跟着 Done
   expect(shown).toContain('Done|  |[自动] |重开终端')
@@ -961,7 +971,7 @@ test('手动把「需要我做」的最后一条标完，在等我的块跟着 D
   }
   const ui = await $.ui.mount({ ...PANE, surface: 'vscode' })
   const has = async (text: RegExp) => (await ui.find({ type: 'Text', text })) !== undefined
-  await ui.press({ key: 'view-me' })
+  await pickView(ui, 'me')
   for (const key of ['block-b1#0', 'block-b2#0']) {
     await ui.press({ key })
     await ui.press({ key: 'done' })
@@ -999,7 +1009,7 @@ test('多选：⇧↓ 拉出一段，改状态一起改；不按 ⇧ 直接走�
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   const row = async () => (await ui.findAll({ type: 'Text', in: 'tree' })).map(f => (f as { text?: string }).text ?? '').join('|')
   const count = (text: string, word: string) => text.split(word).length - 1
-  await ui.press({ key: 'view-all' })
+  await pickView(ui, 'all')
   await ui.key({ key: 'return', in: 'tree' })
   const before = count(await row(), 'Cancelled')
   await ui.key({ key: 'down', shift: true, in: 'tree' })
@@ -1021,7 +1031,7 @@ test('搜索：按 / 露出搜索框，边打边过滤，祖先留着当上下�
   await play($, clock)
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   const has = async (text: RegExp) => (await ui.find({ type: 'Text', text, in: 'tree' })) !== undefined
-  await ui.press({ key: 'view-all' })
+  await pickView(ui, 'all')
   await ui.key({ key: 'return', in: 'tree' })
   expect(await ui.find({ type: 'Input' })).toBeUndefined()
   await ui.key({ key: '/', in: 'tree' })
@@ -1070,7 +1080,7 @@ test('长期没动的块攒到 5 块，提示一键 Done；待验收的不算，
   expect(await ui.find({ type: 'Text', text: /5 块隔了 10 轮以上还开着/ })).toBeDefined()
   await ui.press({ key: 'stale-done' })
   expect(await ui.find({ type: 'Text', text: /隔了 10 轮以上/ })).toBeUndefined()
-  await ui.press({ key: 'view-all' })
+  await pickView(ui, 'all')
   await startAtFirst(ui, clock)
   const shown = (await ui.findAll({ type: 'Text', in: 'tree' })).map(f => (f as { text?: string }).text ?? '').join('|')
   expect(shown).toContain('ToReview')
@@ -1086,7 +1096,7 @@ test('长期没动的提示点「不用」就不再为这几块提示', async ($
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   await ui.press({ key: 'stale-skip' })
   expect(await ui.find({ type: 'Text', text: /隔了 10 轮以上/ })).toBeUndefined()
-  await ui.press({ key: 'view-all' })
+  await pickView(ui, 'all')
   await startAtFirst(ui, clock)
   expect((await ui.findAll({ type: 'Text', in: 'tree' })).map(f => (f as { text?: string }).text ?? '').join('|')).toContain('Todo')
   await ui.unmount()
@@ -1126,7 +1136,7 @@ test('大纲上半截连着 3 块以上整棵都了结的顶层块折成一行�
     return texts.slice(i).find(t => /块 b\d|已了结/.test(t.text ?? ''))?.text
   }
 
-  await ui.press({ key: 'view-all' })
+  await pickView(ui, 'all')
   let text = await shown()
   expect(text).toContain('已了结 4 块')
   expect(text).not.toContain('块 b2')
@@ -1152,7 +1162,7 @@ test('桌面版：「…」那一行点「展开」就展开', async ($, on) => 
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   const ui = await $.ui.mount({ ...PANE, surface: 'vscode' })
   const has = async (text: RegExp) => (await ui.find({ type: 'Text', text })) !== undefined
-  await ui.press({ key: 'view-all' })
+  await pickView(ui, 'all')
   expect(await has(/已了结 4 块/)).toBe(true)
   expect(await has(/块 b2/)).toBe(false)
   await ui.press({ key: 'more-more:b1' })
@@ -1171,7 +1181,7 @@ test('] / [：光标在同级的块之间走，这一层走完到上一层的下
     const i = texts.findIndex(t => t.props?.inverse === true)
     return texts.slice(i).find(t => /块 b\d/.test(t.text ?? ''))?.text
   }
-  await ui.press({ key: 'view-all' })
+  await pickView(ui, 'all')
   await ui.key({ key: 'return', in: 'tree' })
   await startAtFirst(ui, clock)
   await ui.key({ key: 'down', in: 'tree' })
@@ -1190,7 +1200,7 @@ test('桌面版：一长串中文的标题在字之间插零宽空格才折得�
   engine(on, [], { 'session:sess-1': { blocks: [{ ...savedBlock('b1', null), title }] } })
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   const desk = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  await desk.press({ key: 'view-all' })
+  await pickView(desk, 'all')
   expect(await desk.find({ type: 'Text', text: title.split('').join('\u200b') })).toBeDefined()
   await desk.unmount()
   const code = await $.ui.mount({ ...PANE, surface: 'vscode' })
@@ -1245,7 +1255,7 @@ test('问题与结论：加问句字段之前总结的块，原话以问号结�
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   const ui = await $.ui.mount({ ...PANE, surface: 'vscode' })
   const has = async (text: RegExp) => (await ui.find({ type: 'Text', text })) !== undefined
-  await ui.press({ key: 'view-conclusions' })
+  await pickView(ui, 'conclusions')
   expect(await has(/^这个按键为什么没反应？$/)).toBe(true)
   expect(await has(/改按键/)).toBe(false)
   await ui.unmount()
@@ -1328,7 +1338,7 @@ test('刻度尺（桌面版）：鼠标扫过时那一格和邻居鼓起来，�
   const clock = engine(on, [], {}, RULER_REPLIES())
   await playThree($, clock)
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  await ui.press({ key: 'view-all' })
+  await pickView(ui, 'all')
   // 光标默认在最新一行（第 3 轮）；没悬停时下面那行是光标那一轮的标题
   expect(await ruler(ui)).toEqual(['▁', '▅', '█', '#3 改按钮颜色'])
   await ui.pointer({ type: 'move', x: 0, y: 0, in: 'ruler' })
@@ -1393,7 +1403,7 @@ test('同一话题一轮套一轮时总结只挂到第 3 层；M 按话题重新
   }
   for (const turnId of ['t1', 't2', 't3', 't4']) await run(turnId)
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  await ui.press({ key: 'view-all' })
+  await pickView(ui, 'all')
   // 导出的 Markdown 按层级缩进，每层两格
   const depthOf = async (title: string) => {
     await act(ui, 'export')
@@ -1422,5 +1432,75 @@ test('同一话题一轮套一轮时总结只挂到第 3 层；M 按话题重新
   await act(ui, 'relayout')
   await clock.settle()
   for (const title of ['第三轮', '第四轮', '第五轮']) expect(await depthOf(title)).toBe(2)
+  await ui.unmount()
+})
+
+test('同一层最多摆 5 个：多了留最新的 4 个，前面的折进一行「…」；光标在上面的、展开过的照留，「全部展开」和搜索时不折', () => {
+  const kids = Array.from({ length: 7 }, (_, i) => savedBlock(`b${i + 2}`, 'b1', { status: i === 0 ? 'NEEDOK' : 'DOING' }))
+  const list = [savedBlock('b1', null, { status: 'DOING' }), ...kids] as never[]
+  const auto = (extra: Record<string, unknown> = {}) => ({ unfolded: [], hold: [], shownRuns: [], ...extra })
+  const keys = (rows: { key: string }[]) => rows.map(r => r.key)
+
+  // 7 个子块：「…」折进最早的 3 个，留最新的 4 个；折进去的里面有 1 件等我
+  const rows = visibleRows(list, 'all', [], null, [], false, auto())
+  expect(keys(rows)).toEqual(['b1', 'more:b2', 'b5', 'b6', 'b7', 'b8'])
+  expect(rows[1]!.more).toEqual(['b2', 'b3', 'b4'])
+  expect(rows[1]!.moreText).toBe('还有 3 项，1 件等你')
+  // 光标在 b3 上：b3 照留，「…」里少一个
+  expect(keys(visibleRows(list, 'all', [], null, [], false, auto({ hold: ['b3'] })))).toEqual(['b1', 'more:b2', 'b3', 'b6', 'b7', 'b8'])
+  // 展开过这一层的「…」：整层都摆出来
+  expect(keys(visibleRows(list, 'all', [], null, [], false, auto({ shownRuns: ['b2', 'b3', 'b4'] })))).toHaveLength(8)
+  // 层级「全部展开」、搜索：不折
+  expect(keys(visibleRows(list, 'all', [], null, [], false, auto({ isDetailed: true })))).toHaveLength(8)
+  expect(keys(visibleRows(list, 'all', [], null, [], false, auto(), '块'))).toHaveLength(8)
+  // 没有自动折叠的场合（导出）也不折
+  expect(keys(visibleRows(list, 'all', [], null))).toHaveLength(8)
+
+  // 顶层也一样：6 个顶层块留最新的 4 个
+  const tops = Array.from({ length: 6 }, (_, i) => savedBlock(`b${i + 1}`, null, { status: 'DOING' })) as never[]
+  expect(keys(visibleRows(tops, 'all', [], null, [], false, auto()))).toEqual(['more:b1', 'b3', 'b4', 'b5', 'b6'])
+  // 正好 5 个不折
+  expect(keys(visibleRows(tops.slice(0, 5), 'all', [], null, [], false, auto()))).toHaveLength(5)
+})
+
+test('视图栏最多摆 5 个：6 个视图摆前 4 个和「…」；点「…」全摆出来，挑了一个就收起，正看着的露在「…」上；数字键照样切', async ($, on) => {
+  const clock = engine(on, [])
+  await play($, clock)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  // 「…」按钮上的字：正看着的视图收在里面时，字在加粗的 Text 里
+  const more = async () => (await ui.find({ type: 'Button', key: 'view-more' }))?.text
+  const shown = async (v: string) => (await ui.find({ type: 'Button', key: `view-${v}` })) !== undefined
+  // 默认视图「全部」排第 5，收在「…」里，名字露在「…」上
+  expect(await more()).toBe('… 全部')
+  expect(await shown('done')).toBe(true)
+  await ui.press({ key: 'view-more' })
+  expect(await more()).toBe('收起')
+  await ui.press({ key: 'view-tech' })
+  expect(await more()).toBe('… 技术信息')
+  // 数字键切到收在「…」里的视图
+  await ui.key({ key: '5', in: 'tree' })
+  expect(await more()).toBe('… 全部')
+  await ui.key({ key: '1', in: 'tree' })
+  expect(await more()).toBe('… 还有 2 个')
+  await ui.unmount()
+})
+
+test('一块下面的「做了」最多摆 5 条：多了摆前 4 条和「另有几条」，展开详情看全部', async ($, on) => {
+  const did = Array.from({ length: 7 }, (_, i) => ({ text: `第 ${i + 1} 件`, result: false, evidence: [] }))
+  const clock = engine(on, [], {}, [{ title: '做七件事', status: 'DONE', did, conclusion: '', questions: [], needsMe: [], parent: null, resolved: [] }])
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.turn.start({ text: '做七件事', turnId: 't1' })
+  await $.turn.complete({ answer: '好了', durationMs: 1000, isAborted: false, turnId: 't1', reason: 'answer', usage: { ...USAGE, model: 'claude-opus-5-5' } })
+  await clock.settle()
+  const ui = await $.ui.mount({ ...PANE, surface: 'vscode' })
+  const has = async (text: RegExp) => (await ui.find({ type: 'Text', text })) !== undefined
+  await pickView(ui, 'done')
+  expect(await has(/第 4 件/)).toBe(true)
+  expect(await has(/第 5 件/)).toBe(false)
+  expect(await has(/另有 3 条（展开详情看全部）/)).toBe(true)
+  // 光标就在这一块上，再点一下展开详情
+  await ui.press({ key: 'block-b1' })
+  expect(await has(/第 7 件/)).toBe(true)
+  expect(await has(/另有 3 条/)).toBe(false)
   await ui.unmount()
 })

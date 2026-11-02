@@ -36,6 +36,12 @@ export const viewFromArg = (word: string): View | undefined => {
   return undefined
 }
 
+/**
+ * 人一次盯得住的块大约 5 个：视图栏、同一层的块、一块下面的「做了」，摆出来的都不超过这么多。
+ * 多了就把一部分折进一行「…」，它自己也算一个；想看全的，展开那一行，或者层级切到「全部展开」
+ */
+export const MAX_SHOWN = 5
+
 /** 子块类型：用文字标 */
 export const KIND_BADGE: Record<Kind, { text: string; color: string } | undefined> = {
   turn: undefined,
@@ -288,16 +294,20 @@ export type Row = {
   cont: string
   /** 顶层话题（第一个除外）前空一行，让一个话题和它的子块聚成一团 */
   isGap: boolean
-  /** 这一行是一串整棵都了结的顶层块折成的「…」：这一串的块 id；block 是这一串的第一块 */
+  /** 这一行是折起来的「…」：折进去的块 id（和「需要我做」条目的 id）；block 是第一个折进去的块 */
   more?: string[]
+  /** 同一层超过 MAX_SHOWN 个折起来的「…」：这一行的字。没有就是一串整棵都了结的顶层块 */
+  moreText?: string
 }
 
 export const itemKey = (blockId: string, index: number) => `${blockId}#${index}`
 
 /** 「…」那一行的 id：这一串第一块的 id 前面加 more:，不会和块、条目的 id 撞上 */
 export const moreKey = (blockId: string) => `more:${blockId}`
-/** 「…」那一行的标题 */
-export const moreTitle = (count: number) => `已了结 ${count} 块（→ 展开）`
+/** 「…」那一行的字：一串整棵都了结的顶层块，或者同一层太多、折起来的几个 */
+export const moreLabel = (row: Row) => row.moreText ?? `已了结 ${row.more?.length ?? 0} 块`
+/** 「…」那一行在终端里的标题 */
+export const moreTitle = (row: Row) => `${moreLabel(row)}（→ 展开）`
 /** 是「…」那一行的话，给出这一串第一块的 id */
 export const moreRunId = (key: string | null) => (key?.startsWith('more:') === true ? key.slice('more:'.length) : undefined)
 
@@ -325,7 +335,7 @@ const AUTO_FOLD_VIEWS: readonly View[] = ['me', 'asks', 'all']
  * 这样的顶层块连着 MORE_MIN 块以上，整串再折成一行「…」；我展开过的「…」里的块（shownRuns）不再折进去。
  * isDoneFolded（F 一键收起已完成）：整棵了结的顶层块不管连着几块、是不是最新那块、光标在不在上面，都折进「…」
  */
-export type AutoFold = { unfolded: readonly string[]; hold: readonly string[]; shownRuns: readonly string[]; isDoneFolded?: boolean }
+export type AutoFold = { unfolded: readonly string[]; hold: readonly string[]; shownRuns: readonly string[]; isDoneFolded?: boolean; isDetailed?: boolean }
 
 /** 连着几块整棵都了结的顶层块，才折成「…」 */
 const MORE_MIN = 3
@@ -333,7 +343,8 @@ const MORE_MIN = 3
 /**
  * 按视图把树摊成可见的行。除「全部」外都是 sparse tree：命中的块和它们的祖先，其余不显示。
  * hideDone（层级「去掉 Done」）：已了结的块和「需要我做」条目也不算命中，块下面还有没了结的子块时留着当上下文。
- * query（搜索）：还得含这个词才算命中，「全部」视图也一样摊成 sparse tree
+ * query（搜索）：还得含这个词才算命中，「全部」视图也一样摊成 sparse tree。
+ * 同一层超过 MAX_SHOWN 个，前面的折进一行「…」（见 capNodes）；搜索时、层级「全部展开」（isDetailed）时不折
  */
 export const visibleRows = (list: readonly Block[], v: View, folded: readonly string[], zoom: string | null, open: readonly string[] = [], hideDone = false, auto?: AutoFold, query = ''): Row[] => {
   // 「问题与结论」「它已做的」「技术信息」本来就是看做完的事，不自动折
@@ -351,12 +362,45 @@ export const visibleRows = (list: readonly Block[], v: View, folded: readonly st
   }
   const rows: Row[] = []
   const shown = (bs: Block[]) => (isFiltered ? bs.filter(b => keep.has(b.id)) : bs)
-  type Node = { block: Block; item?: Item }
+  /** more：折起来的「…」，里面是折进去的 id；moreText 没有就是一串整棵了结的顶层块 */
+  type Node = { block: Block; item?: Item; more?: string[]; moreText?: string }
+  const nodeKey = (n: Node) => (n.more !== undefined ? moreKey(n.more[0]!) : n.item !== undefined ? itemKey(n.block.id, n.item.index) : n.block.id)
+  const isCapped = auto !== undefined && auto.isDetailed !== true && query.trim() === ''
+  /**
+   * 同一层超过 MAX_SHOWN 个：留最新的几个，前面的折进一行「…」，连它一共 MAX_SHOWN 个。
+   * 光标在上面的、正在跑的照留（留的多了就超一点）；这一层展开过的不折；只折得出一个的不折，不省地方
+   */
+  const capNodes = (nodes: Node[]): Node[] => {
+    if (!isCapped || auto === undefined || nodes.length <= MAX_SHOWN) return nodes
+    // 这一层的「…」展开过，就整层摆出来
+    if (nodes.some(n => auto.shownRuns.includes(nodeKey(n)))) return nodes
+    const isKept = (n: Node) => auto.hold.includes(nodeKey(n)) || (n.more === undefined && n.item === undefined && n.block.live !== undefined)
+    let room = MAX_SHOWN - 1 - nodes.filter(isKept).length
+    const kept = new Set<Node>()
+    for (let i = nodes.length - 1; i >= 0; i--) {
+      const n = nodes[i]!
+      if (isKept(n)) kept.add(n)
+      else if (room > 0) {
+        kept.add(n)
+        room--
+      }
+    }
+    const hidden = nodes.filter(n => !kept.has(n))
+    if (hidden.length < 2) return nodes
+    const ids = hidden.flatMap(n => n.more ?? [nodeKey(n)])
+    // 折进去的里面还有等我的，在「…」上说一声，别让它们被忘了
+    const waiting = hidden.filter(n => (n.more !== undefined ? false : n.item !== undefined ? isOpenStatus(n.item.status) : hasOpenForMe(n.block))).length
+    return [{ block: hidden[0]!.block, more: ids, moreText: `还有 ${ids.length} 项${waiting > 0 ? `，${waiting} 件等你` : ''}` }, ...nodes.filter(n => kept.has(n))]
+  }
   const walk = (node: Node, depth: number, parentCont: string, isLast: boolean) => {
     const b = node.block
     const own = depth === 0 ? '' : isLast ? '   ' : '│  '
     const branch = depth === 0 ? '' : isLast ? '└─ ' : '├─ '
     const below = parentCont + own
+    if (node.more !== undefined) {
+      rows.push({ block: b, key: nodeKey(node), depth, isContext: false, hasChildren: false, isFolded: true, prefix: parentCont + branch, cont: below + '  ', isGap: depth === 0 && rows.length > 0, more: node.more, ...(node.moreText === undefined ? {} : { moreText: node.moreText }) })
+      return
+    }
     if (node.item !== undefined) {
       rows.push({ block: b, item: node.item, key: itemKey(b.id, node.item.index), depth, isContext: false, hasChildren: false, isFolded: false, prefix: parentCont + branch, cont: below + '  ', isGap: false })
       return
@@ -366,7 +410,7 @@ export const visibleRows = (list: readonly Block[], v: View, folded: readonly st
     const items: Node[] = showItems
       ? b.needsMe.map((text, index) => ({ block: b, item: { index, text, status: itemStatus(b, index) } })).filter(one => !(hideDone && SETTLED.includes(one.item.status)))
       : []
-    const kids: Node[] = [...items, ...shown(childrenOf(list, b.id)).map(block => ({ block }))]
+    const kids: Node[] = capNodes([...items, ...shown(childrenOf(list, b.id)).map(block => ({ block }))])
     const isFolded = kids.length > 0 && (folded.includes(b.id) || isAutoFolded(b))
     rows.push({
       block: b,
@@ -387,19 +431,21 @@ export const visibleRows = (list: readonly Block[], v: View, folded: readonly st
   const isDoneFolded = auto?.isDoneFolded === true
   const inRun = (b: Block, i: number) =>
     !auto!.shownRuns.includes(b.id) && (isDoneFolded ? AUTO_FOLD_VIEWS.includes(v) && isSettledTree(list, b) : i < top.length - 1 && isAutoFolded(b))
+  const entries: Node[] = []
   let i = 0
   while (i < top.length) {
     let end = i
     while (canMore && end < top.length && inRun(top[end]!, end)) end++
     if (end - i >= (isDoneFolded ? 1 : MORE_MIN)) {
-      const run = top.slice(i, end).map(b => b.id)
-      rows.push({ block: top[i]!, key: moreKey(top[i]!.id), depth: 0, isContext: false, hasChildren: false, isFolded: true, prefix: '', cont: '  ', isGap: rows.length > 0, more: run })
+      entries.push({ block: top[i]!, more: top.slice(i, end).map(b => b.id) })
       i = end
     } else {
-      walk({ block: top[i]! }, 0, '', i === top.length - 1)
+      entries.push({ block: top[i]! })
       i++
     }
   }
+  // 顶层也一样：一串了结的「…」算一个，太多了再折
+  capNodes(entries).forEach((node, n, all) => walk(node, 0, '', n === all.length - 1))
   return rows
 }
 
@@ -466,12 +512,15 @@ const evidenceLine = (e: Evidence): Line => {
  * 每条「做了」下面挂它的证据。站不住的标出来，验收时一眼看得到：动作没有工具记录是「无证据」，
  * 结果没有跑成功的命令是「未验证」，验证过、后来又改了相关文件的是「待复验」
  */
-const didLines = (b: Block, stale: ReadonlySet<string>): Line[] => {
+const didLines = (b: Block, stale: ReadonlySet<string>, isOpen: boolean): Line[] => {
+  // 超过 MAX_SHOWN 条只摆前几条，连「另有几条」一共 MAX_SHOWN 行；展开详情看全部
+  const rest = isOpen || b.did.length <= MAX_SHOWN ? 0 : b.did.length - (MAX_SHOWN - 1)
+  const more = rest === 0 ? [] : [one('did', `另有 ${rest} 条（展开详情看全部）`, { level: 1 })]
   // 加证据之前存下的块没有这一项，照旧画
-  if (b.didEvidence === undefined) return group('did', b.did)
+  if (b.didEvidence === undefined) return [...group('did', b.did.slice(0, b.did.length - rest)), ...more]
   const isMany = b.did.length > 1
   const out: Line[] = isMany ? [one('did', '')] : []
-  b.did.forEach((text, i) => {
+  b.did.slice(0, b.did.length - rest).forEach((text, i) => {
     const proofs = proofsOf(b, i)
     const flag = !isProven(b, i) ? (isResult(b, i) ? '未验证' : '无证据') : stale.has(itemKey(b.id, i)) ? '待复验' : ''
     const extra: Partial<Line> = { ...(isMany ? { level: 1 as const, bullet: true as const } : {}), ...(flag === '' ? {} : { color: STATUS_INFO.TOREVIEW.color }) }
@@ -479,7 +528,7 @@ const didLines = (b: Block, stale: ReadonlySet<string>): Line[] => {
     out.push(...proofs.slice(0, 3).map(evidenceLine))
     if (proofs.length > 3) out.push(one('proof', `另有 ${proofs.length - 3} 条`, { level: 1 }))
   })
-  return out
+  return [...out, ...more]
 }
 
 /**
@@ -557,7 +606,7 @@ export const blockLines = (b: Block, v: View, isOpen: boolean, now = 0, stale: R
   const lines: Line[] = b.live === undefined ? [] : liveLines(b, now)
   // 进行中的块：手动刷新出来的进展在任何视图里都直接露出来
   if (v === 'asks' && !isOpen && b.live === undefined) return [...lines, ...askLines(b, stale)]
-  if (v === 'done' || isOpen || b.live !== undefined) lines.push(...didLines(b, stale))
+  if (v === 'done' || isOpen || b.live !== undefined) lines.push(...didLines(b, stale, isOpen))
   if ((v === 'done' || isOpen) && b.files.length > 0) lines.push(one('files', b.files.join('、')))
   if ((v === 'conclusions' || v === 'done' || isOpen) && b.conclusion !== '') lines.push(one('conclusion', b.conclusion))
   if (v === 'tech' && b.tech !== undefined) lines.push(...techLines(b.tech))
@@ -789,7 +838,7 @@ export const toTreeRows = (rows: readonly Row[], v: View, open: readonly string[
       const isAuto = b.needsMeAuto?.[row.item.index] != null
       return { ...common, isItem: true, arrow: ITEM_MARK, status: statusText(st), ...(isAuto ? { tag: AUTO_TAG } : {}), title: row.item.text, isContext: false, lines: [] }
     }
-    if (row.more !== undefined) return { ...common, arrow: '▸', status: '…', isOpen: false, isClosed: true, title: moreTitle(row.more.length), isContext: false, lines: [] }
+    if (row.more !== undefined) return { ...common, arrow: '▸', status: '…', isOpen: false, isClosed: true, title: moreTitle(row), isContext: false, lines: [] }
     const badge = KIND_BADGE[b.kind]
     const lines = row.isContext ? [] : blockLines(b, v, open.includes(b.id), now, stale)
     return {
