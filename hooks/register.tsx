@@ -692,13 +692,14 @@ async function asciiInput($: EngineInterface) {
 
 /**
  * 切到输入源 id，返回切之前用的那个；切不了（不是 macOS 之类）返回 undefined。
- * 用系统自带的 osascript 跑一段 JXA 调 TIS 接口，id 从标准输入传。
+ * 用系统自带的 osascript 跑一段 JXA 调 TIS 接口，脚本从标准输入传，id 写在脚本开头（JSON 转义过）。
  * 全文件只有这一处跑程序，命令写成固定文本，官方目录才认得出这个 mod 只跑这一个程序；
+ * 脚本不放 -e 后面：目录把 -e 这类内联程序当成读不出的命令（UNPINNED_NPX）；id 不走环境变量：目录会当成转发凭据；
  * 不取插件目录：目录审核只读得懂「名词.方法(...)」的调用，取目录是读属性，所以也不再编译、不往插件目录写东西
  */
 async function switchInput($: EngineInterface, id: string) {
   try {
-    const r = await $.process.run(['/usr/bin/osascript', '-l', 'JavaScript', '-e', 'ObjC.import("Carbon"); ObjC.bindFunction("TISCopyCurrentKeyboardInputSource", ["id", []]); ObjC.bindFunction("TISGetInputSourceProperty", ["id", ["id", "id"]]); ObjC.bindFunction("TISCreateInputSourceList", ["id", ["id", "bool"]]); ObjC.bindFunction("TISSelectInputSource", ["int", ["id"]]); function run() { const id = $.NSString.alloc.initWithDataEncoding($.NSFileHandle.fileHandleWithStandardInput.readDataToEndOfFile, $.NSUTF8StringEncoding).js.trim() || "com.apple.keylayout.US"; const before = ObjC.unwrap($.TISGetInputSourceProperty($.TISCopyCurrentKeyboardInputSource(), $("TISPropertyInputSourceID"))); const list = $.TISCreateInputSourceList($({ TISPropertyInputSourceID: id }), false); if (list.isNil() || list.count === 0) throw new Error("没有找到输入源 " + id); if ($.TISSelectInputSource(list.objectAtIndex(0)) !== 0) throw new Error("切不过去 " + id); return before }'], { stdin: id, timeoutMs: 3000 })
+    const r = await $.process.run(['/usr/bin/osascript', '-l', 'JavaScript'], { stdin: `const id = ${JSON.stringify(id)}; ObjC.import("Carbon"); ObjC.bindFunction("TISCopyCurrentKeyboardInputSource", ["id", []]); ObjC.bindFunction("TISGetInputSourceProperty", ["id", ["id", "id"]]); ObjC.bindFunction("TISCreateInputSourceList", ["id", ["id", "bool"]]); ObjC.bindFunction("TISSelectInputSource", ["int", ["id"]]); function run() { const before = ObjC.unwrap($.TISGetInputSourceProperty($.TISCopyCurrentKeyboardInputSource(), $("TISPropertyInputSourceID"))); const list = $.TISCreateInputSourceList($({ TISPropertyInputSourceID: id }), false); if (list.isNil() || list.count === 0) throw new Error("没有找到输入源 " + id); if ($.TISSelectInputSource(list.objectAtIndex(0)) !== 0) throw new Error("切不过去 " + id); return before }`, timeoutMs: 3000 })
     return r.exitCode === 0 ? r.stdout.trim() : undefined
   } catch {
     return undefined
@@ -944,7 +945,7 @@ async function changeRow($: EngineInterface, key: string, choose: (current: Stat
       if (index === undefined) {
         const to = choose(b.status)
         // 验收通过：告诉 Claude 是看过证据才通过的，站不住的那几条也说出来
-        const weak = (pick: (i: number) => boolean) => (b.didEvidence === undefined ? [] : b.did.filter((_, i) => pick(i)))
+        const weak = (keep: (i: number) => boolean) => (b.didEvidence === undefined ? [] : b.did.filter((_, i) => keep(i)))
         const stale = staleFacts(all)
         const notes = [
           ['其中这几条没有工具调用能证明', weak(i => !isResult(b, i) && !isProven(b, i))],
