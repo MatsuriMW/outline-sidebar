@@ -727,11 +727,48 @@ async function pick($: EngineInterface, key: string) {
   const { blockId, index } = parseKey(key)
   // 点块：第二下展开详情。点只挪光标，不改状态，改状态用 S
   if ((await read($, cursor)) === key) {
-    if (index === undefined) {
-      await update($, open, ids => toggle(ids, blockId))
-      if ((await read($, open)).includes(blockId)) await markReviewed($, blockId)
-    }
+    if (index === undefined) await toggleDetails($, blockId)
   } else await setCursor($, key)
+}
+
+/** 打开或收起一块的详情；打开就算看过了 */
+async function toggleDetails($: EngineInterface, blockId: string) {
+  await update($, open, ids => toggle(ids, blockId))
+  if ((await read($, open)).includes(blockId)) await markReviewed($, blockId)
+}
+
+/** 桌面版点一行：两下隔多久以内算双击。单击的折叠要等这么久没有第二下才动手 */
+const DOUBLE_MS = 350
+
+/** 桌面版刚单击、还在等第二下的那一行 */
+let pendingPress: { key: string; at: number } | undefined
+
+/**
+ * 桌面版点一行（整行都算，见 row-press.tsx）：光标马上挪过去；
+ * 单击有子块的块，折起或展开子块；双击打开或收起详情。单击的折叠等 DOUBLE_MS 再动手，免得双击先折一下再展开
+ */
+async function pressRow($: EngineInterface, key: string) {
+  const now = await $.clock.now()
+  const isDouble = pendingPress !== undefined && pendingPress.key === key && now - pendingPress.at < DOUBLE_MS
+  await update($, scope, () => 'tree')
+  await clearSelection($)
+  await setCursor($, key)
+  const { blockId, index } = parseKey(key)
+  if (isDouble) {
+    pendingPress = undefined
+    if (index === undefined) await toggleDetails($, blockId)
+    return
+  }
+  const press = { key, at: now }
+  pendingPress = press
+  $.clock.after(DOUBLE_MS, async () => {
+    if (pendingPress !== press) return
+    pendingPress = undefined
+    const row = (await currentRows($)).find(r => r.key === key)
+    if (row === undefined || row.item !== undefined || !row.hasChildren) return
+    await setFold($, key, !row.isFolded)
+    await keepCursorVisible($)
+  })
 }
 
 /**
@@ -1835,6 +1872,7 @@ export const register: Register = (on, options) => {
       await pick($, data.id)
     }
     else if (data.type === 'focus') void asciiInput($)
+    else if (data.type === 'row' && typeof data.key === 'string') await pressRow($, data.key)
     else if (data.type === 'ruler' && typeof data.id === 'string') {
       const id = data.id
       await goToBlock($, id)
@@ -1883,6 +1921,8 @@ export const register: Register = (on, options) => {
     const isTerm = e.surface === 'terminal'
     // 一长串中文不断行的毛病只在 Claude 桌面版上见过，零宽空格只加在那里
     const isDesktop = e.surface === 'desktop'
+    // 桌面版一行盖一层点击层（row-press.tsx）：单击折叠、双击详情，不再画箭头、圆点
+    const isRowPress = isDesktop && 'Client' in els
     // 面板拿到键盘（点了视图栏、工具栏，或 Tab 进来）也切英文：按钮的字母快捷键一样会被输入法拿去组字
     if (e.surface === 'terminal') {
       if (e.props.isFocused && !isPaneFocused) void asciiInput($)
@@ -2137,7 +2177,7 @@ export const register: Register = (on, options) => {
       const height = Math.max(6, e.props.scroll.bodyRows - headerRows)
       const wheelAt = await read($, wheel)
       const levelNow = await read($, level)
-      paneRuler = ticks.length === 0 ? undefined : { ticks, isHover: false }
+      paneRuler = ticks.length === 0 ? undefined : { ticks, isHover: false, columns: width }
       paneTree = {
         rows: toTreeRows(rows, v, openIds, shownAt, now, await selectedKeys($), staleDid),
         height,
@@ -2161,7 +2201,7 @@ export const register: Register = (on, options) => {
       <Box flexDirection="column" width={width}>
         {header}
         {/* 桌面版的刻度尺跟着鼠标鼓起来；VS Code、手机端没有 Client，不画 */}
-        {ticks.length > 0 && 'Client' in els && <Box marginBottom="sm">{els.Client({ module: './ruler.tsx', key: RULER, props: { ticks, isHover: isDesktop }, width })}</Box>}
+        {ticks.length > 0 && 'Client' in els && <Box marginBottom="sm">{els.Client({ module: './ruler.tsx', key: RULER, props: { ticks, isHover: isDesktop, columns: width }, width })}</Box>}
         {empty !== undefined && <Text dimColor>{empty}</Text>}
         {rows.map(row => {
           const b = row.block
@@ -2203,14 +2243,18 @@ export const register: Register = (on, options) => {
               marginTop={row.isGap ? 'sm' : 0}
               paddingY={desk === undefined ? 0 : 'xs'}
               {...(isAt ? { backgroundColor: DESK_CURSOR_BG } : {})}
+              {...(isRowPress ? { position: 'relative' as const } : {})}
               hover={{ scope, backgroundColor: isAt ? DESK_CURSOR_BG : DESK_HOVER_BG }}
             >
               <Box flexDirection="row" alignItems="flex-start" columnGap={desk === undefined ? 1 : 'xs'} paddingLeft={row.depth * DESK_INDENT}>
-                <Box width={desk === undefined ? 2 : DESK_ARROW_COL} flexShrink={0}>
-                  <Button key={`block-${row.key}`} plain onPress={() => pick($, row.key)}>
-                    {arrow}
-                  </Button>
-                </Box>
+                {/* 桌面版整行都能点，不画箭头、圆点 */}
+                {!isRowPress && (
+                  <Box width={desk === undefined ? 2 : DESK_ARROW_COL} flexShrink={0}>
+                    <Button key={`block-${row.key}`} plain onPress={() => pick($, row.key)}>
+                      {arrow}
+                    </Button>
+                  </Box>
+                )}
                 {b.isPending && row.item === undefined ? (
                   <Text dimColor>…</Text>
                 ) : desk === undefined ? (
@@ -2247,6 +2291,12 @@ export const register: Register = (on, options) => {
                   {lines.slice(1).map(line => drawLine(line, ''))}
                 </Box>
               </Box>
+              {/* 盖在整行上面接点击，画在最后才在最上层 */}
+              {isRowPress && 'Client' in els && (
+                <Box position="absolute" top={0} left={0} right={0} bottom={0}>
+                  {els.Client({ module: './row-press.tsx', key: `press-${row.key}`, props: { id: row.key }, width: '100%', height: '100%' })}
+                </Box>
+              )}
             </Box>
           )
         })}

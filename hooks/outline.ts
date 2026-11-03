@@ -776,11 +776,12 @@ export type TreeProps = {
 
 /**
  * 一格的高低（0～7，对应 ▁▂▃▄▅▆▇█）：了结的最矮，还开着的高一点，等我的更高，光标所在那一轮顶满。
- * 桌面版悬停时在这个基础上往上加，像 Dock 那样鼓起来
+ * 桌面版悬停时在这个基础上往上加，像 Dock 那样鼓起来。isLive：这一格里有还在跑的那一轮，跑完时刻度尺让它闪一下
  */
-export type Tick = { id: string; turns: string; title: string; color: string; height: number; isAt: boolean }
+export type Tick = { id: string; turns: string; title: string; color: string; height: number; isAt: boolean; isLive: boolean }
 
-export type RulerProps = { ticks: Tick[]; isHover: boolean }
+/** columns：刻度尺那块区域有多宽，用来算一格放多宽；客户端模块头一次画的时候还量不到自己多宽 */
+export type RulerProps = { ticks: Tick[]; isHover: boolean; columns: number }
 
 /** 光标所在的那一轮：光标在「需要我做」的条目、子任务、「…」上时，往上找到它属于的那一轮 */
 export const turnOf = (list: readonly Block[], key: string | null) => {
@@ -790,10 +791,13 @@ export const turnOf = (list: readonly Block[], key: string | null) => {
   return b?.id
 }
 
+/** 刻度尺最多铺多宽：右边总留五分之一、至少 4 列的空，轮数再多也不铺满 */
+export const rulerRoom = (columns: number) => Math.max(1, columns - Math.max(4, Math.ceil(columns / 5)))
+
 /** 刻度尺的格子：一轮一格，按轮次排；轮数比格子多时几轮并一格，挑最要紧的那轮代表它们（等我的 > 还开着的 > 最后一轮） */
 export const rulerTicks = (list: readonly Block[], cursorKey: string | null, columns: number): Tick[] => {
   const turns = list.filter(b => b.kind === 'turn').sort((a, b) => a.turn - b.turn)
-  const per = Math.max(1, Math.ceil(turns.length / Math.max(1, columns)))
+  const per = Math.max(1, Math.ceil(turns.length / rulerRoom(columns)))
   const at = turnOf(list, cursorKey)
   const ticks: Tick[] = []
   for (let i = 0; i < turns.length; i += per) {
@@ -807,6 +811,7 @@ export const rulerTicks = (list: readonly Block[], cursorKey: string | null, col
       color: STATUS_INFO[b.status].color,
       height: isAt ? 7 : hasOpenForMe(b) ? 4 : isOpenStatus(b.status) ? 2 : 0,
       isAt,
+      isLive: group.some(one => one.live !== undefined),
     })
   }
   return ticks

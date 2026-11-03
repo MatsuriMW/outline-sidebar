@@ -1,7 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
-import { clampParent, jumpTarget, relayout, rulerTicks, visibleRows, wrapCells } from '../hooks/outline'
+import { clampParent, jumpTarget, relayout, rulerRoom, rulerTicks, visibleRows, wrapCells } from '../hooks/outline'
 
 const PANE = {
   plugin: 'outline-sidebar',
@@ -1321,16 +1321,17 @@ test('刻度尺：一轮一格，等我的高、了结的矮、光标那一轮�
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   // 1 号视图「需要我做的」：光标默认在最新一行，是第 2 轮的那一条
   await ui.key({ key: '1', in: 'tree' })
-  expect(await ruler(ui)).toEqual(['▁', '█', '▁'])
-  // 点第 3 格：第 3 轮不在「需要我做的」里，换到「全部」，光标落在它上面
-  await ui.pointer({ type: 'down', x: 2, y: 0, button: 'left', in: 'ruler' })
-  expect(await ruler(ui)).toEqual(['▁', '▅', '█'])
+  // 面板 60 列只有 3 轮：每格放宽到 3 列
+  expect(await ruler(ui)).toEqual(['▁▁▁', '███', '▁▁▁'])
+  // 点第 3 格（第 7 列落在第 3 格里）：第 3 轮不在「需要我做的」里，换到「全部」，光标落在它上面
+  await ui.pointer({ type: 'down', x: 7, y: 0, button: 'left', in: 'ruler' })
+  expect(await ruler(ui)).toEqual(['▁▁▁', '▅▅▅', '███'])
   const texts = (await ui.findAll({ type: 'Text', in: 'tree' })) as { text?: string; props?: { inverse?: boolean } }[]
   const i = texts.findIndex(t => t.props?.inverse === true)
   expect(texts.slice(i).find(t => /改按钮颜色/.test(t.text ?? ''))).toBeDefined()
   // 终端不跟着鼠标鼓起来，也没有标题那一行
   await ui.pointer({ type: 'move', x: 0, y: 0, in: 'ruler' })
-  expect(await ruler(ui)).toEqual(['▁', '▅', '█'])
+  expect(await ruler(ui)).toEqual(['▁▁▁', '▅▅▅', '███'])
   await ui.unmount()
 })
 
@@ -1340,11 +1341,62 @@ test('刻度尺（桌面版）：鼠标扫过时那一格和邻居鼓起来，�
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   await pickView(ui, 'all')
   // 光标默认在最新一行（第 3 轮）；没悬停时下面那行是光标那一轮的标题
-  expect(await ruler(ui)).toEqual(['▁', '▅', '█', '#3 改按钮颜色'])
-  await ui.pointer({ type: 'move', x: 0, y: 0, in: 'ruler' })
-  expect(await ruler(ui)).toEqual(['▄', '▇', '█', '#1 修 Hexo 部署'])
+  expect(await ruler(ui)).toEqual(['▁▁▁', '▅▅▅', '███', '#3 改按钮颜色'])
+  // 第 2 列还在第 1 格里
+  await ui.pointer({ type: 'move', x: 2, y: 0, in: 'ruler' })
+  expect(await ruler(ui)).toEqual(['▄▄▄', '▇▇▇', '███', '#1 修 Hexo 部署'])
   await ui.pointer({ type: 'leave', x: 0, y: 0, in: 'ruler' })
-  expect(await ruler(ui)).toEqual(['▁', '▅', '█', '#3 改按钮颜色'])
+  expect(await ruler(ui)).toEqual(['▁▁▁', '▅▅▅', '███', '#3 改按钮颜色'])
+  await ui.unmount()
+})
+
+test('刻度尺：面板窄、轮数多时一轮一列，宽了每格放宽，最多 3 列', async ($, on) => {
+  const clock = engine(on, [], {}, RULER_REPLIES())
+  await playThree($, clock)
+  const widths = async (bodyColumns: number) => {
+    const ui = await $.ui.mount({ ...PANE, props: { ...PANE.props, bodyColumns }, surface: 'terminal' })
+    const cells = (await ruler(ui)).map(t => t.length)
+    await ui.unmount()
+    return cells
+  }
+  expect(await widths(8)).toEqual([1, 1, 1])
+  expect(await widths(12)).toEqual([2, 2, 2])
+  expect(await widths(60)).toEqual([3, 3, 3])
+})
+
+test('刻度尺右边总留空：留五分之一、至少 4 列，轮数再多也不铺满；格子用等宽字体，桌面版不折成两行', async ($, on) => {
+  expect([rulerRoom(60), rulerRoom(40), rulerRoom(10), rulerRoom(3)]).toEqual([48, 32, 6, 1])
+  const clock = engine(on, [], {}, RULER_REPLIES())
+  await playThree($, clock)
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  const ticks = (await ui.findAll({ type: 'Text', in: 'ruler' })) as { text?: string; props?: { mono?: boolean } }[]
+  expect(ticks.slice(0, 3).every(t => t.props?.mono === true)).toBe(true)
+  await ui.unmount()
+})
+
+test('刻度尺：还在跑的那一轮跑完时，它那一格闪两下（灭、亮、灭）就停', async ($, on) => {
+  const clock = engine(on, [], {}, [...RULER_REPLIES(), { title: '再改一处', status: 'DONE', did: [], conclusion: '', questions: [], needsMe: [], parent: null, resolved: [] }])
+  await playThree($, clock)
+  await $.turn.start({ text: '再改一处', turnId: 't4' })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await pickView(ui, 'all')
+  const fourth = async () => (await ruler(ui))[3]
+  // 还在跑：不闪
+  expect(await fourth()).toBe('███')
+  await ui.advance(1000)
+  expect(await fourth()).toBe('███')
+  await $.turn.complete({ answer: '好了', durationMs: 1000, isAborted: false, turnId: 't4', reason: 'answer', usage: { ...USAGE, model: 'claude-opus-5-5' } })
+  await clock.settle()
+  expect(await fourth()).toBe('▁▁▁')
+  await ui.advance(180)
+  expect(await fourth()).toBe('███')
+  await ui.advance(180)
+  expect(await fourth()).toBe('▁▁▁')
+  await ui.advance(180)
+  expect(await fourth()).toBe('███')
+  // 播完就停，不循环
+  await ui.advance(2000)
+  expect(await fourth()).toBe('███')
   await ui.unmount()
 })
 
@@ -1352,7 +1404,8 @@ test('刻度尺：轮数比面板宽时几轮并一格，挑等我的那轮代�
   const block = (turn: number, status: string, needsMe: string[] = []) =>
     ({ id: `b${turn}`, kind: 'turn', turn, ask: '', title: `第 ${turn} 轮`, status, did: [], conclusion: '', questions: [], needsMe, parent: null, isManual: false, isStatusManual: false, isPending: false, files: [], commands: 0 }) as never
   const list = [block(1, 'DONE'), block(2, 'WAITING', ['确认']), block(3, 'DONE'), block(4, 'DONE')]
-  const ticks = rulerTicks(list, 'b4', 2)
+  // 6 列留出 4 列空，只剩 2 格
+  const ticks = rulerTicks(list, 'b4', 6)
   expect(ticks.map(t => [t.id, t.turns, t.height])).toEqual([['b2', '#1–#2', 4], ['b4', '#3–#4', 7]])
 })
 
@@ -1502,5 +1555,38 @@ test('一块下面的「做了」最多摆 5 条：多了摆前 4 条和「另�
   await ui.press({ key: 'block-b1' })
   expect(await has(/第 7 件/)).toBe(true)
   expect(await has(/另有 3 条/)).toBe(false)
+  await ui.unmount()
+})
+
+test('桌面版：整行能点，单击母块折起 / 展开子块，双击打开 / 收起详情；不画箭头、圆点', async ($, on) => {
+  const clock = engine(on, [])
+  await play($, clock)
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  // 桌面版的标题在中文字之间插了零宽空格，比对前去掉
+  const has = async (text: RegExp) => ((await ui.findAll({ type: 'Text' })) as { text?: string }[]).some(t => text.test((t.text ?? '').replace(/\u200b/g, '')))
+  const press = (key: string) => ui.pointer({ type: 'down', x: 0, y: 0, button: 'left', in: `press-${key}` })
+  await pickView(ui, 'all')
+  expect(await ui.find({ type: 'Button', key: 'block-b2' })).toBeUndefined()
+  // b2 下面挂着子任务「查 Hexo 文档」；详情（我的原话）收着
+  expect(await has(/查 Hexo 文档/)).toBe(true)
+  expect(await has(/博客部署挂了/)).toBe(false)
+  // 单击：等过双击的间隔才折
+  await press('b2')
+  expect(await has(/查 Hexo 文档/)).toBe(true)
+  await clock.advance(400)
+  expect(await has(/查 Hexo 文档/)).toBe(false)
+  await press('b2')
+  await clock.advance(400)
+  expect(await has(/查 Hexo 文档/)).toBe(true)
+  // 双击：打开详情，不折
+  await press('b2')
+  await press('b2')
+  await clock.advance(400)
+  expect(await has(/博客部署挂了/)).toBe(true)
+  expect(await has(/查 Hexo 文档/)).toBe(true)
+  await press('b2')
+  await press('b2')
+  await clock.advance(400)
+  expect(await has(/博客部署挂了/)).toBe(false)
   await ui.unmount()
 })

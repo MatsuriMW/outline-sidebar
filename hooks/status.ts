@@ -36,7 +36,7 @@ export const STATUS_INFO: Record<Status, StatusInfo> = {
   QUEUED: { label: 'Queued', color: '#6f86a8', group: 'inactive', icon: 'queued', meaning: '排上队了，到点自己接着跑' },
   DELEGATED: { label: 'Delegated', color: '#5b9690', group: 'inactive', icon: 'delegated', meaning: '交给子代理或别的 Agent 在跑' },
   PAUSED: { label: 'Paused', color: '#b39a3e', group: 'inactive', icon: 'paused', meaning: '停在半路（被打断），之后再接着做' },
-  WAITING: { label: 'Waiting', color: '#8f7fb6', group: 'waiting', icon: 'waiting', meaning: '在等用户或外部的东西', isForMe: true },
+  WAITING: { label: 'Waiting', color: '#7b9bba', group: 'waiting', icon: 'waiting', meaning: '在等用户或外部的东西', isForMe: true },
   SUSPENDED: { label: 'Suspended', color: '#a17f66', group: 'waiting', icon: 'suspended', meaning: '先搁置，暂时不做' },
   DONE: { label: 'Done', color: '#629c7f', group: 'completed', icon: 'done', meaning: '做完了' },
   YES: { label: 'Yes', color: '#5f9e6e', group: 'completed', icon: 'yes', meaning: '用户回答了「是」，同意', isVerdict: true },
