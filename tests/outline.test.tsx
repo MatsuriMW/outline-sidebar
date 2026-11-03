@@ -1570,20 +1570,19 @@ test('桌面版：整行能点，单击母块折起 / 展开子块，双击打�
   // b2 下面挂着子任务「查 Hexo 文档」；详情（我的原话）收着
   expect(await has(/查 Hexo 文档/)).toBe(true)
   expect(await has(/博客部署挂了/)).toBe(false)
-  // 单击：等过双击的间隔才折
+  // 单击：马上折，不等双击的间隔
   await press('b2')
-  expect(await has(/查 Hexo 文档/)).toBe(true)
-  await clock.advance(400)
   expect(await has(/查 Hexo 文档/)).toBe(false)
-  await press('b2')
   await clock.advance(400)
+  await press('b2')
   expect(await has(/查 Hexo 文档/)).toBe(true)
-  // 双击：打开详情，不折
-  await press('b2')
-  await press('b2')
   await clock.advance(400)
+  // 双击：打开详情，第一下的折叠撤回来
+  await press('b2')
+  await press('b2')
   expect(await has(/博客部署挂了/)).toBe(true)
   expect(await has(/查 Hexo 文档/)).toBe(true)
+  await clock.advance(400)
   await press('b2')
   await press('b2')
   await clock.advance(400)

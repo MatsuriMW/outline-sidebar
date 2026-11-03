@@ -728,38 +728,36 @@ async function toggleDetails($: EngineInterface, blockId: string) {
   if ((await read($, open)).includes(blockId)) await markReviewed($, blockId)
 }
 
-/** 桌面版点一行：两下隔多久以内算双击。单击的折叠要等这么久没有第二下才动手 */
+/** 桌面版点一行：两下隔多久以内算双击 */
 const DOUBLE_MS = 350
 
-/** 桌面版刚单击、还在等第二下的那一行 */
-let pendingPress: { key: string; at: number } | undefined
+/** 桌面版上一下单击的那一行；折过的记下折之前的样子，第二下成了双击就折回去 */
+let pendingPress: { key: string; at: number; wasFolded?: boolean } | undefined
 
 /**
  * 桌面版点一行（整行都算，见 row-press.tsx）：光标马上挪过去；
- * 单击有子块的块，折起或展开子块；双击打开或收起详情。单击的折叠等 DOUBLE_MS 再动手，免得双击先折一下再展开
+ * 单击有子块的块，马上折起或展开子块；双击打开或收起详情，第一下的折叠撤回来（子块会闪一下，换单击不用等）
  */
 async function pressRow($: EngineInterface, key: string) {
   const now = await $.clock.now()
-  const isDouble = pendingPress !== undefined && pendingPress.key === key && now - pendingPress.at < DOUBLE_MS
+  const first = pendingPress
+  const isDouble = first !== undefined && first.key === key && now - first.at < DOUBLE_MS
   await update($, scope, () => 'tree')
   await clearSelection($)
   await setCursor($, key)
   const { blockId, index } = parseKey(key)
   if (isDouble) {
     pendingPress = undefined
+    if (first.wasFolded !== undefined) await setFold($, key, first.wasFolded)
     if (index === undefined) await toggleDetails($, blockId)
     return
   }
-  const press = { key, at: now }
-  pendingPress = press
-  $.clock.after(DOUBLE_MS, async () => {
-    if (pendingPress !== press) return
-    pendingPress = undefined
-    const row = (await currentRows($)).find(r => r.key === key)
-    if (row === undefined || row.item !== undefined || !row.hasChildren) return
-    await setFold($, key, !row.isFolded)
-    await keepCursorVisible($)
-  })
+  pendingPress = { key, at: now }
+  const row = (await currentRows($)).find(r => r.key === key)
+  if (row === undefined || row.item !== undefined || !row.hasChildren) return
+  pendingPress.wasFolded = row.isFolded
+  await setFold($, key, !row.isFolded)
+  await keepCursorVisible($)
 }
 
 /**
