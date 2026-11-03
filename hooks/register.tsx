@@ -671,9 +671,6 @@ async function enterView($: EngineInterface) {
 /** 点树之前用的输入法；回对话框敲第一个键时切回去 */
 let restoreInput: string | undefined
 
-/** 这次加载里有没有试过编译 bin/input-source */
-let isBuildTried = false
-
 /** 面板上一次画的时候有没有键盘，用来只在刚拿到键盘那一下切输入法 */
 let isPaneFocused = false
 
@@ -685,33 +682,26 @@ let paneRuler: RulerProps | undefined
 
 /**
  * 点进大纲树时切到英文键盘：中文输入法开着，J/K、T 这些字母会被拿去组字。
- * 用 tools/ascii-input.swift（第一次用时编译到 bin/），只在 macOS 上，失败了也不打扰。
- * 命令都写成固定文本、在插件目录里跑，官方目录才认得出这个 mod 只跑这几个程序
+ * 只在 macOS 上，失败了也不打扰
  */
 async function asciiInput($: EngineInterface) {
-  if ((await switchToAscii($)) || isBuildTried) return
-  // 编译最多试一次：编不出来、或者编出来也跑不了，就别每点一下都再编
-  isBuildTried = true
-  try {
-    await $.process.run(['/bin/mkdir', '-p', 'bin'], { cwd: $.plugin.root })
-    // 编成 input-source：旧版编的 bin/switch-input 从环境变量读输入法 ID，换个名字让装过旧版的机器重编一次
-    const built = await $.process.run(['/usr/bin/swiftc', '-O', 'tools/ascii-input.swift', '-o', 'bin/input-source'], { cwd: $.plugin.root, timeoutMs: 120000 })
-    if (built.exitCode === 0) await switchToAscii($)
-  } catch {
-    // 不是 macOS，或者没装 Xcode 命令行工具：就不切了
-  }
+  const before = await switchInput($, 'com.apple.keylayout.US')
+  // 原来就是英文就不用切回去；连着点几下，记的还是最早那个
+  if (before !== undefined && before !== '' && before !== 'com.apple.keylayout.US' && restoreInput === undefined) restoreInput = before
 }
 
-/** 切到英文键盘，记下原来的输入法；还没编译过（或者切不了）就返回 false */
-async function switchToAscii($: EngineInterface) {
+/**
+ * 切到输入源 id，返回切之前用的那个；切不了（不是 macOS 之类）返回 undefined。
+ * 用系统自带的 osascript 跑一段 JXA 调 TIS 接口，id 从标准输入传。
+ * 全文件只有这一处跑程序，命令写成固定文本，官方目录才认得出这个 mod 只跑这一个程序；
+ * 不取插件目录：目录审核只读得懂「名词.方法(...)」的调用，取目录是读属性，所以也不再编译、不往插件目录写东西
+ */
+async function switchInput($: EngineInterface, id: string) {
   try {
-    const r = await $.process.run(['./bin/input-source'], { cwd: $.plugin.root, stdin: 'com.apple.keylayout.US', timeoutMs: 3000 })
-    const before = r.stdout.trim()
-    // 原来就是英文就不用切回去；连着点几下，记的还是最早那个
-    if (r.exitCode === 0 && before !== '' && before !== 'com.apple.keylayout.US' && restoreInput === undefined) restoreInput = before
-    return r.exitCode === 0
+    const r = await $.process.run(['/usr/bin/osascript', '-l', 'JavaScript', '-e', 'ObjC.import("Carbon"); ObjC.bindFunction("TISCopyCurrentKeyboardInputSource", ["id", []]); ObjC.bindFunction("TISGetInputSourceProperty", ["id", ["id", "id"]]); ObjC.bindFunction("TISCreateInputSourceList", ["id", ["id", "bool"]]); ObjC.bindFunction("TISSelectInputSource", ["int", ["id"]]); function run() { const id = $.NSString.alloc.initWithDataEncoding($.NSFileHandle.fileHandleWithStandardInput.readDataToEndOfFile, $.NSUTF8StringEncoding).js.trim() || "com.apple.keylayout.US"; const before = ObjC.unwrap($.TISGetInputSourceProperty($.TISCopyCurrentKeyboardInputSource(), $("TISPropertyInputSourceID"))); const list = $.TISCreateInputSourceList($({ TISPropertyInputSourceID: id }), false); if (list.isNil() || list.count === 0) throw new Error("没有找到输入源 " + id); if ($.TISSelectInputSource(list.objectAtIndex(0)) !== 0) throw new Error("切不过去 " + id); return before }'], { stdin: id, timeoutMs: 3000 })
+    return r.exitCode === 0 ? r.stdout.trim() : undefined
   } catch {
-    return false
+    return undefined
   }
 }
 
@@ -1207,7 +1197,7 @@ function restoreInputMethod($: EngineInterface) {
   const back = restoreInput
   if (back === undefined) return
   restoreInput = undefined
-  void $.process.run(['./bin/input-source'], { cwd: $.plugin.root, stdin: back, timeoutMs: 3000 }).catch(() => undefined)
+  void switchInput($, back)
 }
 
 /** /：露出搜索框，焦点交过去 */
@@ -1695,7 +1685,7 @@ export const register: Register = (on, options) => {
     const back = restoreInput
     if (back === undefined || e.key === undefined) return next(e)
     restoreInput = undefined
-    void $.process.run(['./bin/input-source'], { cwd: $.plugin.root, stdin: back, timeoutMs: 3000 }).catch(() => undefined)
+    void switchInput($, back)
     return /^[a-zA-Z]$/.test(e.key.key) ? { text: e.text, cursor: e.cursor } : next(e)
   })
 
